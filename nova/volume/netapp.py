@@ -966,6 +966,83 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
                                                 Request=request)
         self._check_fail(request, response)
 
+    def _api_call_raw(self, host_id, method, **kwargs):
+        """Make Netapp API call through DFM proxy"""
+        request = self.client.factory.create('Request')
+        request.Name = method
+        xml_str = ''.join('<%s>%s</%s>' % (k, str(v), k) for (k, v) in kwargs.iteritems())
+        request.Args = text.Raw(xml_str)
+        response = self.client.service.ApiProxy(Target=host_id,
+                                                Request=request)
+        return (request, response)
+
+    def _api_call(self, host_id, name, **kwargs):
+        """Make Netapp API call through DFM proxy with response check"""
+        (request, response) = self._api_call_raw(host_id, name, **kwargs)
+        self._check_fail(request, response)
+
+    def _create_volume_snapshot(self, host_id, vol_name, snap_name):
+        """Create a volume snapshot on the filer."""
+        self._api_call(host_id, 'snapshot-create', **{
+            'is-valid-lun-clone-snapshot':  'true',
+            'snapshot':                     snap_name,
+            'volume':                       vol_name,
+        })
+
+    def _delete_volume_snapshot(self, host_id, vol_name, snap_name):
+        """Delete a volume snapshot on the filer."""
+        wait_interval = 5
+        tries = 1
+        while True:
+            (req, res) = self._api_call_raw(host_id, 'snapshot-delete',
+                                            snapshot=snap_name, volume=vol_name)
+            if tries > 5 or res.Status != 'failed':
+                break
+
+            LOG.warn('API call failed: "%s", retrying in %ds' % (res.Reason, wait_interval))
+            time.sleep(wait_interval)
+            tries += 1
+            wait_interval *= 2
+        self._check_fail(req, res)
+
+    def _create_lun_from_snapshot(self, host_id, parent_lun_path, snap_name, lun_path):
+        """Create LUN clone from parent LUN and volume snapshot"""
+        self._api_call(host_id, 'lun-create-clone', **{
+            'parent-lun-path':  parent_lun_path,
+            'parent-snap':      snap_name,
+            'path':             lun_path,
+        })
+
+    def _lun_clone_split(self, host_id, lun_path):
+        """Split LUN clone from its parent LUN and snapshot"""
+        self._api_call(host_id, 'lun-clone-split-start', path=lun_path)
+        while True:
+            (req, res) = self._api_call_raw(host_id,
+                                            'lun-clone-split-status-list-info',
+                                            path=lun_path)
+            # api call _fails_ when split has finished (reason=="LUN is not a clone")
+            if res.Status == 'failed' and res.Errno == 9048:
+                break
+            self._check_fail(req, res)
+            time.sleep(5)
+
+    @utils.synchronized('dfm-edit-lock')
+    def _copy_or_clone_lun(self, lun, src_path, dest_path, snap):
+        """Copy (or clone if FlexClone is available) LUN
+
+        Clone LUN if FlexClone license is present on the filer.
+        Otherwise use "lun clone", "lun split" combination to copy LUN.
+        """
+        host_info = self._get_host_details(lun.HostId)
+        if 'flex_clone' in host_info.Licenses.License:
+            self._clone_lun(lun.HostId, src_path, dest_path, snap)
+        else:
+            snap_name = time.strftime('%Y%m%d-%H%M%S')
+            self._create_volume_snapshot(lun.HostId, lun.VolumeName, snap_name)
+            self._create_lun_from_snapshot(lun.HostId, src_path, snap_name, dest_path)
+            self._lun_clone_split(lun.HostId, dest_path)
+            self._delete_volume_snapshot(lun.HostId, lun.VolumeName, snap_name)
+
     def create_snapshot(self, snapshot):
         """Driver entry point for creating a snapshot.
 
@@ -987,7 +1064,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         qtree_path = '/vol/%s/%s' % (lun.VolumeName, lun.QtreeName)
         src_path = '%s/%s' % (qtree_path, lun_name)
         dest_path = '%s/%s' % (qtree_path, snapshot_name)
-        self._clone_lun(lun.HostId, src_path, dest_path, True)
+        self._copy_or_clone_lun(lun, src_path, dest_path, True)
 
     def delete_snapshot(self, snapshot):
         """Driver entry point for deleting a snapshot."""
@@ -1038,7 +1115,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         src_path = '/vol/%s/%s/%s' % (lun.VolumeName, lun.QtreeName,
                                       snapshot_name)
         dest_path = '/vol/%s/%s/%s' % (lun.VolumeName, clone_name, clone_name)
-        self._clone_lun(lun.HostId, src_path, dest_path, False)
+        self._copy_or_clone_lun(lun, src_path, dest_path, False)
         self._refresh_dfm_luns(lun.HostId)
         self._discover_dataset_luns(dataset, clone_name)
         if vol_size > snap_size:
