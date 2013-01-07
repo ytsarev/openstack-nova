@@ -941,6 +941,20 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
                                                 Request=request)
         self._check_fail(request, response)
 
+    @utils.synchronized('dfm-edit-lock')
+    def _resize_lun(self, lun_id, new_size):
+        """Resize LUN to the 'new_size' (GB)"""
+        server = self.client.service
+        gigabytes = 1073741824L  # 2^30
+        try:
+            res = server.LunResize(LunNameOrId=lun_id,
+                                   NewSize=(new_size * gigabytes),
+                                   ResizeUnderlyingVolume=False)
+            self._wait_for_job(res)
+        except (suds.WebFault, Exception):
+            msg = _('Failed to resize lun "%s"')
+            raise exception.VolumeBackendAPIException(data=msg % lun_id)
+
     def _create_qtree(self, host_id, vol_name, qtree_name):
         """Create a qtree the filer."""
         request = self.client.factory.create('Request')
@@ -998,7 +1012,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         """
         vol_size = volume['size']
         snap_size = snapshot['volume_size']
-        if vol_size != snap_size:
+        if vol_size < snap_size:
             msg = _('Cannot create volume of size %(vol_size)s from '
                 'snapshot of size %(snap_size)s')
             raise exception.VolumeBackendAPIException(data=msg % locals())
@@ -1026,6 +1040,9 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         self._clone_lun(lun.HostId, src_path, dest_path, False)
         self._refresh_dfm_luns(lun.HostId)
         self._discover_dataset_luns(dataset, clone_name)
+        if vol_size > snap_size:
+            new_lun = self._lookup_lun_for_volume(clone_name, project)
+            self._resize_lun(new_lun.id, vol_size)
 
     def check_for_export(self, context, volume_id):
         raise NotImplementedError()
