@@ -31,6 +31,7 @@ from suds.sax import text
 
 from nova import exception
 from nova import flags
+from nova import utils
 from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.volume import driver
@@ -368,6 +369,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         self.discovered_datasets.append(ds)
         return ds
 
+    @utils.synchronized('dfm-edit-lock')
     def _provision(self, name, description, project, ss_type, size):
         """Provision a LUN through provisioning manager.
 
@@ -428,6 +430,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
             return None
         return volume_type['name']
 
+    @utils.synchronized('dfm-edit-lock')
     def _remove_destroy(self, name, project):
         """Remove the LUN from the dataset, also destroying it.
 
