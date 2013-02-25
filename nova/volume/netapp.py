@@ -1031,7 +1031,8 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         lun = self._get_lun_details(lun_id)
         extra_gb = vol_size
         new_size = '+%dg' % extra_gb
-        self._resize_volume(lun.HostId, lun.VolumeName, new_size)
+        # see PCI-437
+        #self._resize_volume(lun.HostId, lun.VolumeName, new_size)
         clone_name = volume['name']
         self._create_qtree(lun.HostId, lun.VolumeName, clone_name)
         src_path = '/vol/%s/%s/%s' % (lun.VolumeName, lun.QtreeName,
