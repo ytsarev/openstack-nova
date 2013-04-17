@@ -222,3 +222,14 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
                                check_exit_code=[0, 21, 255])
             self._run_iscsiadm(iscsi_properties, ('--op', 'delete'),
                                check_exit_code=[0, 21, 255])
+        else:
+            # can't close the session, at least delete the device for disconnected vol
+            if not 'target_lun' in iscsi_properties:
+                return
+            host_device = device_prefix+str(iscsi_properties['target_lun'])
+            device_shortname = os.path.basename(os.path.realpath(host_device))
+            delete_ctl_file = '/sys/block/'+device_shortname+'/device/delete'
+            if os.path.exists(delete_ctl_file):
+                # echo 1 > /sys/block/sdX/device/delete
+                utils.execute('cp', '/dev/stdin', delete_ctl_file,
+                              process_input='1', run_as_root=True)
