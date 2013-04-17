@@ -284,10 +284,24 @@ class FloatingIP(object):
 
         admin_context = context.get_admin_context()
         try:
-            floating_ips = self.db.floating_ip_get_all_by_host(admin_context,
-                                                               self.host)
+            unsorted_floating_ips = self.db.floating_ip_get_all_by_host(admin_context,
+                                                                        self.host)
         except exception.NotFound:
             return
+
+        # Elastic pool at the top of list, Public pool at the end of list
+        floating_ips = []
+        public_ips   = []
+        elastic_ips  = []
+        for floating_ip in unsorted_floating_ips:
+            if floating_ip.get('pool') == "public":
+                 public_ips.append(floating_ip)
+            elif floating_ip.get('pool') == "elastic":
+                 elastic_ips.append(floating_ip)
+            else:
+                 floating_ips.append(floating_ip)
+
+        floating_ips = elastic_ips + floating_ips + public_ips
 
         for floating_ip in floating_ips:
             fixed_ip_id = floating_ip.get('fixed_ip_id')
@@ -559,6 +573,12 @@ class FloatingIP(object):
         @utils.synchronized(unicode(floating_address))
         def do_associate():
             # associate floating ip
+            floating_ip = self.db.floating_ip_get_by_address(context,
+                                                         floating_address)
+            insert = False
+            if floating_ip.get('pool') == "elastic":
+               insert = True
+
             res = self.db.floating_ip_fixed_ip_associate(context,
                                                          floating_address,
                                                          fixed_address,
@@ -569,7 +589,7 @@ class FloatingIP(object):
             try:
                 # gogo driver time
                 self.l3driver.add_floating_ip(floating_address, fixed_address,
-                        interface)
+                        interface, insert=insert)
             except exception.ProcessExecutionError as e:
                 self.db.floating_ip_disassociate(context, floating_address)
                 if "Cannot find device" in str(e):
