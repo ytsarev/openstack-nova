@@ -33,6 +33,8 @@ from nova.openstack.common import log as logging
 from nova import utils
 from nova.volume import iscsi
 
+from nova import db
+from socket import gethostbyname
 
 LOG = logging.getLogger(__name__)
 
@@ -55,6 +57,9 @@ volume_opts = [
     cfg.StrOpt('iscsi_ip_address',
                default='$my_ip',
                help='use this ip for iscsi'),
+    cfg.StrOpt('iscsi_ip_prefix',
+               default='$my_ip',
+               help='use this ip prefix as iscsi discovery filter'),
     cfg.IntOpt('iscsi_port',
                default=3260,
                help='The port that the iSCSI daemon is listening on'),
@@ -175,11 +180,87 @@ class VolumeDriver(object):
         changes to the volume object to be persisted."""
         self._create_volume(volume['name'], self._sizestr(volume['size']))
 
+    @utils.synchronized('create_volume_from_snapshot')
     def create_volume_from_snapshot(self, volume, snapshot):
         """Creates a volume from a snapshot."""
         self._create_volume(volume['name'], self._sizestr(volume['size']))
-        self._copy_volume(self.local_path(snapshot), self.local_path(volume),
-                          snapshot['volume_size'])
+
+        connection_info = self.initialize_connection(snapshot,0)
+        storage_path = self._register_storage(connection_info)
+        try:
+            self._copy_volume(storage_path, self.local_path(volume),
+                              snapshot['volume_size'])
+        finally:
+            self._unregister_storage(connection_info)
+
+    def _register_storage(self, connection_info):
+        """Register the storage to nova-volume node"""
+        iscsi_properties = connection_info['data']
+        try:
+            self._run_iscsiadm(iscsi_properties, ())
+        except exception.ProcessExecutionError as exc:
+            # iscsiadm returns 21 for "No records found" after version 2.0-871
+            if exc.exit_code in [21, 255]:
+                self._run_iscsiadm(iscsi_properties, ('--op', 'new'))
+            else:
+                raise
+
+        if iscsi_properties.get('auth_method'):
+            self._iscsiadm_update(iscsi_properties,
+                                  "node.session.auth.authmethod",
+                                  iscsi_properties['auth_method'])
+            self._iscsiadm_update(iscsi_properties,
+                                  "node.session.auth.username",
+                                  iscsi_properties['auth_username'])
+            self._iscsiadm_update(iscsi_properties,
+                                  "node.session.auth.password",
+                                  iscsi_properties['auth_password'])
+
+        self._run_iscsiadm(iscsi_properties, ("--login",),
+                           check_exit_code=[0, 255])
+
+        self._iscsiadm_update(iscsi_properties, "node.startup", "automatic")
+
+        host_device = ("/dev/disk/by-path/ip-%s-iscsi-%s-lun-%s" %
+                        (iscsi_properties['target_portal'],
+                         iscsi_properties['target_iqn'],
+                         iscsi_properties.get('target_lun', 0)))
+
+        # The /dev/disk/by-path/... node is not always present immediately
+        # TODO(justinsb): This retry-with-delay is a pattern, move to utils?
+        tries = 0
+        while not os.path.exists(host_device):
+            if tries >= FLAGS.num_iscsi_scan_tries:
+                raise exception.NovaException(_("iSCSI device not found at %s") %
+                                      (host_device))
+
+            LOG.warn(_("ISCSI volume not yet found. "
+                       "Will rescan & retry.  Try number: %(tries)s") %
+                     locals())
+
+            # The rescan isn't documented as being necessary(?), but it helps
+            self._run_iscsiadm(iscsi_properties, ("--rescan",))
+
+            tries = tries + 1
+            if not os.path.exists(host_device):
+                time.sleep(tries ** 2)
+
+        if tries != 0:
+            LOG.debug(_("Found iSCSI node. "
+                        "(after %(tries)s rescans)") %
+                      locals())
+
+        connection_info['data']['device_path'] = host_device
+        return host_device
+
+    def _unregister_storage(self, connection_info):
+        """Detach the storage from nova-volume node"""
+        iscsi_properties = connection_info['data']
+        self._iscsiadm_update(iscsi_properties, "node.startup", "manual")
+        self._run_iscsiadm(iscsi_properties, ("--logout",),
+                           check_exit_code=[0, 255])
+        self._run_iscsiadm(iscsi_properties, ('--op', 'delete'),
+                           check_exit_code=[0, 255])
 
     def delete_volume(self, volume):
         """Deletes a logical volume."""
@@ -312,15 +393,26 @@ class ISCSIDriver(VolumeDriver):
         super(ISCSIDriver, self).set_execute(execute)
         self.tgtadm.set_execute(execute)
 
-    def ensure_export(self, context, volume):
+    def ensure_export(self, context, volume, host = "localhost"):
         """Synchronously recreates an export for a logical volume."""
         # NOTE(jdg): tgtadm doesn't use the iscsi_targets table
         # TODO(jdg): In the future move all of the dependent stuff into the
         # cooresponding target admin class
+
+        try:
+            # Volume
+            my_host = volume['host']
+            issnapshot = 0
+        except:
+            # Snapshot
+            my_host = host
+            issnapshot = 1
+ 
         if not isinstance(self.tgtadm, iscsi.TgtAdm):
             try:
                 iscsi_target = self.db.volume_get_iscsi_target_num(context,
-                                                               volume['id'])
+                                                               volume['id'],
+                                                               my_host)
             except exception.NotFound:
                 LOG.info(_("Skipping ensure_export. No iscsi_target "
                            "provisioned for volume: %s"), volume['id'])
@@ -331,7 +423,7 @@ class ISCSIDriver(VolumeDriver):
         # Check for https://bugs.launchpad.net/nova/+bug/1065702
         old_name = None
         volume_name = volume['name']
-        if (volume['provider_location'] is not None and
+        if not issnapshot and (volume['provider_location'] is not None and
             volume['name'] not in volume['provider_location']):
 
             msg = _('Detected inconsistency in provider_location id')
@@ -411,11 +503,19 @@ class ISCSIDriver(VolumeDriver):
                 target = {'host': host, 'target_num': target_num}
                 self.db.iscsi_target_create_safe(context, target)
 
-    def create_export(self, context, volume):
+    def create_export(self, context, storage, host = 'localhost'):
         """Creates an export for a logical volume."""
+        try:
+            # Volume
+            my_host = storage['host']
+        except:
+            # Snapshot
+            my_host = host
 
-        iscsi_name = "%s%s" % (FLAGS.iscsi_target_prefix, volume['name'])
-        volume_path = "/dev/%s/%s" % (FLAGS.volume_group, volume['name'])
+        self._ensure_iscsi_targets(context, my_host)
+
+        iscsi_name = "%s%s" % (FLAGS.iscsi_target_prefix, storage['name'])
+        storage_path = "/dev/%s/%s" % (FLAGS.volume_group, storage['name'])
 
         model_update = {}
 
@@ -423,10 +523,11 @@ class ISCSIDriver(VolumeDriver):
         # cooresponding target admin class
         if not isinstance(self.tgtadm, iscsi.TgtAdm):
             lun = 0
-            self._ensure_iscsi_targets(context, volume['host'])
+            self._ensure_iscsi_targets(context, storage['host'])
             iscsi_target = self.db.volume_allocate_iscsi_target(context,
-                                                                volume['id'],
-                                                                volume['host'])
+                                                                storage['id'],
+                                                                storage['host'],
+                                                                my_host)
         else:
             lun = 1  # For tgtadm the controller is lun 0, dev starts at lun 1
             iscsi_target = 0  # NOTE(jdg): Not used by tgtadm
@@ -436,25 +537,29 @@ class ISCSIDriver(VolumeDriver):
         tid = self.tgtadm.create_iscsi_target(iscsi_name,
                                               iscsi_target,
                                               0,
-                                              volume_path)
+                                              storage_path)
         model_update['provider_location'] = _iscsi_location(
             FLAGS.iscsi_ip_address, tid, iscsi_name, lun)
         return model_update
 
-    def remove_export(self, context, volume):
-        """Removes an export for a logical volume."""
+    def remove_export(self, context, storage, host = "localhost"):
+        """Removes an export for a logical volume or a snapshot."""
+        try:
+            # Volume
+            my_host = storage['host']
+            issnapshot=False
+        except:
+            # Snapshot
+            my_host = host
+            issnapshot=True
 
         # NOTE(jdg): tgtadm doesn't use the iscsi_targets table
         # TODO(jdg): In the future move all of the dependent stuff into the
         # cooresponding target admin class
         if not isinstance(self.tgtadm, iscsi.TgtAdm):
-            try:
-                iscsi_target = self.db.volume_get_iscsi_target_num(context,
-                                                               volume['id'])
-            except exception.NotFound:
-                LOG.info(_("Skipping remove_export. No iscsi_target "
-                           "provisioned for volume: %s"), volume['id'])
-                return
+            iscsi_target = self.db.volume_get_iscsi_target_num(context,
+                                                               storage['id'],
+                                                               my_host)
         else:
             iscsi_target = 0
 
@@ -462,7 +567,7 @@ class ISCSIDriver(VolumeDriver):
 
             # NOTE: provider_location may be unset if the volume hasn't
             # been exported
-            location = volume['provider_location'].split(' ')
+            location = storage['provider_location'].split(' ')
             iqn = location[1]
 
             # ietadm show will exit with an error
@@ -470,23 +575,29 @@ class ISCSIDriver(VolumeDriver):
             self.tgtadm.show_target(iscsi_target, iqn=iqn)
         except Exception as e:
             LOG.info(_("Skipping remove_export. No iscsi_target "
-                       "is presently exported for volume: %s"), volume['id'])
-            return
+                       "is presently exported for volume or snapshot: %s. Removing as discovered device."), storage['id'])
 
-        self.tgtadm.remove_iscsi_target(iscsi_target, 0, volume['id'])
+            # Discovered iSCSI device, have to be removed by IQN
+            try:
+                iscsi_properties = self._get_iscsi_properties(storage)
+                self.tgtadm.delete_target_iqn(iscsi_properties['target_iqn'])
+            except Exception as e:
+                LOG.info(_("Not a discovered device, skipping."))
 
-    def _do_iscsi_discovery(self, volume):
+        self.tgtadm.remove_iscsi_target(iscsi_target, 0, storage['id'], issnapshot=issnapshot)
+
+    def _do_iscsi_discovery(self, storage, host):
         #TODO(justinsb): Deprecate discovery and use stored info
         #NOTE(justinsb): Discovery won't work with CHAP-secured targets (?)
         LOG.warn(_("ISCSI provider_location not stored, using discovery"))
 
-        volume_name = volume['name']
+        storage_name = storage['name']
 
         (out, _err) = self._execute('iscsiadm', '-m', 'discovery',
-                                    '-t', 'sendtargets', '-p', volume['host'],
+                                    '-t', 'sendtargets', '-p', host,
                                     run_as_root=True)
         for target in out.splitlines():
-            if FLAGS.iscsi_ip_address in target and volume_name in target:
+            if FLAGS.iscsi_ip_prefix in target and storage_name in target:
                 return target
         return None
 
@@ -516,21 +627,35 @@ class ISCSIDriver(VolumeDriver):
 
         properties = {}
 
-        location = volume['provider_location']
-
-        if location:
+        try:
+            location = volume['provider_location']
             # provider_location is the same format as iSCSI discovery output
             properties['target_discovered'] = False
-        else:
-            location = self._do_iscsi_discovery(volume)
+        except:
+            try:
+                # Volume has host name
+                my_host = volume['host']
+            except:
+                # snapshot is near volume
+                my_host = db.snapshot_get_host(self,volume['id'])
 
-            if not location:
-                raise exception.InvalidVolume(_("Could not find iSCSI export "
-                                                " for volume %s") %
-                                              (volume['name']))
+            try:
+                LOG.debug(_("ISCSI provider_location not stored, using estimation"))
+                iscsi_name = "%s%s" % (FLAGS.iscsi_target_prefix, volume['name'])
+                iscsi_target = 1
+                location = _iscsi_location (gethostbyname(my_host), iscsi_target, iscsi_name)
+                properties['target_discovered'] = False
+            except:
+                LOG.debug(_("ISCSI Discovery: Starting."))
+                location = self._do_iscsi_discovery(volume,my_host)
 
-            LOG.debug(_("ISCSI Discovery: Found %s") % (location))
-            properties['target_discovered'] = True
+                if not location:
+                    raise exception.Error(_("Could not find iSCSI export "
+                                            "for volume or snapshot %s") %
+                                          (volume['name']))
+
+                LOG.debug(_("ISCSI Discovery: Found %s") % (location))
+                properties['target_discovered'] = True
 
         results = location.split(" ")
         properties['target_portal'] = results[0].split(",")[0]
@@ -545,21 +670,31 @@ class ISCSIDriver(VolumeDriver):
 
         properties['volume_id'] = volume['id']
 
-        auth = volume['provider_auth']
-        if auth:
-            (auth_method, auth_username, auth_secret) = auth.split()
+        try:
+           auth = volume['provider_auth']
+           if auth:
+               (auth_method, auth_username, auth_secret) = auth.split()
 
-            properties['auth_method'] = auth_method
-            properties['auth_username'] = auth_username
-            properties['auth_password'] = auth_secret
+               properties['auth_method'] = auth_method
+               properties['auth_username'] = auth_username
+               properties['auth_password'] = auth_secret
+        except:
+               # TBD: use auth from snapshot's volume id
+               LOG.debug(_("ISCSI Discovery: None auth methos"))
+               properties['auth_method'] = ""
+               properties['auth_username'] = ""
+               properties['auth_password'] = ""
 
+        LOG.debug(_("ISCSI properties: %s.") % properties)
         return properties
 
-    def _run_iscsiadm(self, iscsi_properties, iscsi_command):
+    def _run_iscsiadm(self, iscsi_properties, iscsi_command, **kwargs):
+        check_exit_code = kwargs.pop('check_exit_code', 0)
         (out, err) = self._execute('iscsiadm', '-m', 'node', '-T',
                                    iscsi_properties['target_iqn'],
                                    '-p', iscsi_properties['target_portal'],
-                                   *iscsi_command, run_as_root=True)
+                                   *iscsi_command, run_as_root=True,
+                                   check_exit_code=check_exit_code)
         LOG.debug("iscsiadm %s: stdout=%s stderr=%s" %
                   (iscsi_command, out, err))
         return (out, err)

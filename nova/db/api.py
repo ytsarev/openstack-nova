@@ -1132,9 +1132,9 @@ def volume_get_by_ec2_id(context, ec2_id):
     return IMPL.volume_get_by_ec2_id(context, ec2_id)
 
 
-def volume_get_iscsi_target_num(context, volume_id):
+def volume_get_iscsi_target_num(context, volume_id, host = "all"):
     """Get the target num (tid) allocated to the volume."""
-    return IMPL.volume_get_iscsi_target_num(context, volume_id)
+    return IMPL.volume_get_iscsi_target_num(context, volume_id, host)
 
 
 def volume_update(context, volume_id, values):
@@ -1191,6 +1191,16 @@ def snapshot_get(context, snapshot_id):
 def snapshot_get_all(context):
     """Get all snapshots."""
     return IMPL.snapshot_get_all(context)
+
+
+def snapshot_get_all_by_host(context, host):
+    """Get all snapshots belonging to a host."""
+    return IMPL.snapshot_get_all_by_host(context, host)
+
+
+def snapshot_get_host(context, snapshot_id):
+    """Get a snapshot host or raise if it does not exist."""
+    return IMPL.snapshot_get_host(context, snapshot_id)
 
 
 def snapshot_get_all_by_project(context, project_id):
