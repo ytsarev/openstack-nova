@@ -36,6 +36,7 @@ from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.volume import driver
 from nova.volume import volume_types
+from nova.api.ec2 import ec2utils
 
 LOG = logging.getLogger(__name__)
 
@@ -496,7 +497,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         self._provision(name, description, project, ss_type, size)
 
     def _lookup_lun_for_volume(self, name, project):
-        """Lookup the LUN that corresponds to the give volume.
+        """Lookup the LUN that corresponds to the given volume or snapshot.
 
         Initial lookups involve a table scan of all of the discovered LUNs,
         but later lookups are done instantly from the hashtable.
@@ -510,6 +511,24 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
             if lun.lunpath.endswith(lunpath_suffix):
                 self.lun_table[name] = lun
                 return lun
+
+        # fallback to pre-Folsom volume/snapshot names
+        if name.startswith('vol-'):
+            ec2_id = ec2utils.id_to_ec2_vol_id(name[4:])
+        elif name.startswith('snap-'):
+            ec2_id = ec2utils.id_to_ec2_snap_id(name[5:])
+        else:
+            msg = _("No entry in LUN table for volume %s") % (name)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        lunpath_suffix = '/' + ec2_id
+        for lun in self.discovered_luns:
+            if lun.dataset.project != project:
+                continue
+            if lun.lunpath.endswith(lunpath_suffix):
+                self.lun_table[name] = lun
+                return lun
+
         msg = _("No entry in LUN table for volume %s") % (name)
         raise exception.VolumeBackendAPIException(data=msg)
 
@@ -1058,6 +1077,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         project = snapshot['project_id']
         lun = self._lookup_lun_for_volume(vol_name, project)
         lun_id = lun.id
+        dataset = lun.dataset
         lun = self._get_lun_details(lun_id)
         extra_gb = snapshot['volume_size']
         new_size = '+%dg' % extra_gb
@@ -1069,18 +1089,22 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         src_path = '%s/%s' % (qtree_path, lun_name)
         dest_path = '%s/%s' % (qtree_path, snapshot_name)
         self._copy_or_clone_lun(lun, src_path, dest_path, True)
+        self._refresh_dfm_luns(lun.HostId)
+        self._discover_dataset_luns(dataset, snapshot_name)
 
     def delete_snapshot(self, snapshot):
         """Driver entry point for deleting a snapshot."""
         vol_name = snapshot['volume_name']
         snapshot_name = snapshot['name']
         project = snapshot['project_id']
-        lun = self._lookup_lun_for_volume(vol_name, project)
+        lun = self._lookup_lun_for_volume(snapshot_name, project)
         lun_id = lun.id
         lun = self._get_lun_details(lun_id)
         lun_path = '/vol/%s/%s/%s' % (lun.VolumeName, lun.QtreeName,
                                       snapshot_name)
-        self._destroy_lun(lun.HostId, lun_path)
+        lun_path2 = '/vol/' + str(lun.LunPath)
+        LOG.debug('delete_snapshot: lun_path=%s lun_path2=%s' % (lun_path, lun_path2))
+        self._destroy_lun(lun.HostId, lun_path2)
         extra_gb = snapshot['volume_size']
         new_size = '-%dg' % extra_gb
         self._resize_volume(lun.HostId, lun.VolumeName, new_size)
@@ -1100,7 +1124,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         vol_name = snapshot['volume_name']
         snapshot_name = snapshot['name']
         project = snapshot['project_id']
-        lun = self._lookup_lun_for_volume(vol_name, project)
+        lun = self._lookup_lun_for_volume(snapshot_name, project)
         lun_id = lun.id
         dataset = lun.dataset
         old_type = dataset.type
@@ -1118,8 +1142,10 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         self._create_qtree(lun.HostId, lun.VolumeName, clone_name)
         src_path = '/vol/%s/%s/%s' % (lun.VolumeName, lun.QtreeName,
                                       snapshot_name)
+        src_path2 = '/vol/' + str(lun.LunPath)
+        LOG.debug('create_volume_from_snapshot: src_path=%s src_path2=%s' % (src_path, src_path2))
         dest_path = '/vol/%s/%s/%s' % (lun.VolumeName, clone_name, clone_name)
-        self._copy_or_clone_lun(lun, src_path, dest_path, False)
+        self._copy_or_clone_lun(lun, src_path2, dest_path, False)
         self._refresh_dfm_luns(lun.HostId)
         self._discover_dataset_luns(dataset, clone_name)
         if vol_size > snap_size:
