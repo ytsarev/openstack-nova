@@ -455,6 +455,19 @@ class LibvirtDriver(driver.ComputeDriver):
         # Otherwise, destroy it
         if virt_dom is not None:
             try:
+                virt_dom.shutdown()
+
+                for x in xrange(FLAGS.libvirt_wait_soft_reboot_seconds):
+                    (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
+                    state = LIBVIRT_POWER_STATE[state]
+                    LOG.debug(_("Instance shutdown status: %s"), state)
+                    if state in [power_state.SHUTDOWN,power_state.CRASHED]:
+                        LOG.info(_("Instance shutdown successfully."),
+                                 instance=instance)
+                        break
+                    else:
+                        greenthread.sleep(1)
+
                 virt_dom.destroy()
             except libvirt.libvirtError as e:
                 is_okay = False
