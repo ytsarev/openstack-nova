@@ -116,6 +116,7 @@ class HostState(object):
         if capabilities is None:
             capabilities = {}
         self.capabilities = ReadOnlyDict(capabilities.get(topic, None))
+        self.memory_free = self.capabilities.get('host_memory_free', None)
         if service is None:
             service = {}
         self.service = ReadOnlyDict(service)
@@ -180,9 +181,8 @@ class HostState(object):
         return True
 
     def __repr__(self):
-        return ("host '%s': free_ram_mb:%s free_disk_mb:%s" %
-                (self.host, self.free_ram_mb, self.free_disk_mb))
-
+        return ("host '%s': free_ram_mb:%s free_disk_mb:%s memory_free:%s" %
+                (self.host, self.free_ram_mb, self.free_disk_mb, self.memory_free))
 
 class HostManager(object):
     """Base HostManager class."""
