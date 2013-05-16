@@ -878,9 +878,9 @@ class CloudController(object):
         def _format_attr_instance_initiated_shutdown_behavior(instance,
                                                                result):
             if instance['shutdown_terminate']:
-                result['instanceInitiatedShutdownBehavior'] = 'terminate'
+                result['instanceInitiatedShutdownBehavior'] = {'value': 'terminate'}
             else:
-                result['instanceInitiatedShutdownBehavior'] = 'stop'
+                result['instanceInitiatedShutdownBehavior'] = {'value': 'stop'}
 
         def _format_attr_instance_type(instance, result):
             self._format_instance_type(instance, result)
@@ -898,7 +898,7 @@ class CloudController(object):
             _unsupported_attribute(instance, result)
 
         def _format_attr_user_data(instance, result):
-            result['userData'] = base64.b64decode(instance['user_data'])
+            result['userData'] = {'value': base64.b64decode(instance['user_data'])}
 
         attribute_formatter = {
             'blockDeviceMapping': _format_attr_block_device_mapping,
