@@ -86,7 +86,16 @@ def compute_fill_first_cost_fn(host_state, weighing_properties):
     is -1.0. With a -1.0 this function runs in reverse, so systems
     with the most free memory will be preferred.
     """
-    return host_state.free_ram_mb
+    try:
+        if host_state.memory_free is not None:
+            LOG.debug(_("host_state.memory_free=%s") % host_state.memory_free)
+            return host_state.memory_free
+        else:
+            LOG.debug(_("host_state.free_ram_mb=%s") % host_state.free_ram_mb)
+            return host_state.free_ram_mb
+    except:
+        LOG.debug(_("host_state.free_ram_mb=%s") % host_state.free_ram_mb)
+        return host_state.free_ram_mb
 
 
 def weighted_sum(weighted_fns, host_states, weighing_properties):
