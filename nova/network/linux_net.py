@@ -641,8 +641,6 @@ def remove_floating_forward(floating_ip, fixed_ip, device):
 
 def floating_forward_rules(floating_ip, fixed_ip, device):
     rule = '-s %s -j SNAT --to %s' % (fixed_ip, floating_ip)
-    if device:
-        rule += ' -o %s' % device
     return [('PREROUTING', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)),
             ('OUTPUT', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)),
             ('float-snat', rule)]
