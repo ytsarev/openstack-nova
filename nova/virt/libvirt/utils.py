@@ -180,9 +180,10 @@ def clear_logical_volume(path):
     while remaining_bytes:
         zero_blocks = remaining_bytes / bs
         seek_blocks = (vol_size - remaining_bytes) / bs
+        # GDC: Clean one block only, we do not need more security (it is Private cloud)
         zero_cmd = ('dd', 'bs=%s' % bs,
                     'if=/dev/zero', 'of=%s' % path,
-                    'seek=%s' % seek_blocks, 'count=%s' % zero_blocks)
+                    'seek=%s' % seek_blocks, 'count=1')
         if zero_blocks:
             utils.execute(*zero_cmd, run_as_root=True)
         remaining_bytes %= bs
@@ -300,7 +301,7 @@ def mkfs(fs, path, label=None):
         if fs in ['ext3', 'ext4']:
             args.extend(['-F'])
         if label:
-            args.extend(['-n', label])
+            args.extend(['-L', label])
         args.append(path)
         execute(*args)
 
