@@ -2070,8 +2070,18 @@ class LibvirtDriver(driver.ComputeDriver):
         :returns: the total amount of memory(MB).
 
         """
+        if FLAGS.libvirt_hugepages:
+            if sys.platform.upper() not in ['LINUX2', 'LINUX3']:
+                return 0
 
-        return self._conn.getInfo()[1]
+            m = open('/proc/meminfo').read().split()
+            idx1 = m.index('HugePages_Total:')
+            idx2 = m.index('Hugepagesize:')
+
+            total_kb = int(m[idx1 + 1]) * int(m[idx2 + 1])
+            return int(total_kb / 1024)
+        else:
+            return self._conn.getInfo()[1]
 
     @staticmethod
     def get_local_gb_total():
@@ -2126,6 +2136,12 @@ class LibvirtDriver(driver.ComputeDriver):
         idx1 = m.index('MemFree:')
         idx2 = m.index('Buffers:')
         idx3 = m.index('Cached:')
+
+        if FLAGS.libvirt_hugepages:
+            idx4 = m.index('HugePages_Total:')
+            idx5 = m.index('HugePages_Free:')
+            idx6 = m.index('Hugepagesize:')
+
         if FLAGS.libvirt_type == 'xen':
             used = 0
             for domain_id in self.list_instance_ids():
@@ -2143,9 +2159,13 @@ class LibvirtDriver(driver.ComputeDriver):
             # Convert it to MB
             return used / 1024
         else:
-            avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))
-            # Convert it to MB
-            return self.get_memory_mb_total() - avail / 1024
+            if FLAGS.libvirt_hugepages:
+                used_kb = (int(m[idx4 + 1]) - int(m[idx5 + 1])) * int(m[idx6 + 1])
+                return used_kb / 1024
+            else:
+                avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))
+                # Convert it to MB
+                return self.get_memory_mb_total() - avail / 1024
 
     def get_local_gb_used(self):
         """Get the free hdd size(GB) of physical computer.
