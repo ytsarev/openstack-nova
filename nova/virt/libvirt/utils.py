@@ -137,6 +137,16 @@ def volume_group_free_space(vg):
                        run_as_root=True)
     return int(out.strip())
 
+def volume_group_total_space(vg):
+    """Return total space on volume group in bytes.
+
+    :param vg: volume group name
+    """
+    out, err = execute('vgs', '--noheadings', '--nosuffix',
+                       '--units', 'b', '-o', 'vg_size', vg,
+                       run_as_root=True)
+    return int(out.strip())
+
 
 def list_logical_volumes(vg):
     """List logical volumes paths for given volume group.
