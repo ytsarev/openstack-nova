@@ -174,6 +174,21 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
                          iscsi_properties['target_iqn'],
                          iscsi_properties.get('target_lun', 0)))
 
+	volume_id = connection_info['data']['volume_id']
+	device_ec2id = "/dev/%s/%s" % (FLAGS.volume_group, ec2utils.id_to_ec2_vol_id(volume_id))
+	
+        # we've just found that old EC2 id based device of volume exist, that's very likely a 
+        # migrated volume and it is worth to use it instead of new uuid based device which 
+        # could not exist at all
+        if os.path.exists(device_ec2id):
+	    target_iqn = 'iqn.2010-10.org.openstack:%s' % FLAGS.volume_name_template
+	    target_iqn = target_iqn % device_ec2id
+	    host_device = device_ec2id
+	    iscsi_properties['target_iqn']=target_iqn
+	    
+	    msg = 'Found EC2 volume ID: %s, attaching pre-migration volume' % (device_ec2id)
+	    LOG.debug(msg)
+
         # The /dev/disk/by-path/... node is not always present immediately
         # TODO(justinsb): This retry-with-delay is a pattern, move to utils?
         tries = 0
