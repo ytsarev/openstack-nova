@@ -584,6 +584,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
         self.memory = 1024 * 1024 * 500
         self.vcpus = 1
         self.cpu = None
+        self.hugepages = False
         self.acpi = False
         self.apic = False
         self.pae = False
@@ -623,6 +624,12 @@ class LibvirtConfigGuest(LibvirtConfigObject):
             os.append(etree.Element("boot", dev=self.os_boot_dev))
         root.append(os)
 
+    def _format_memorybacking(self, root):
+        if self.hugepages:
+            memorybacking = etree.Element("memoryBacking")
+            memorybacking.append(etree.Element("hugepages"))
+            root.append(memorybacking)
+
     def _format_features(self, root):
         if self.acpi or self.apic or self.pae:
             features = etree.Element("features")
@@ -649,6 +656,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
 
         self._format_basic_props(root)
         self._format_os(root)
+        self._format_memorybacking(root)
         self._format_features(root)
 
         if self.clock is not None:
