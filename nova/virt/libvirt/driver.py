@@ -1349,6 +1349,19 @@ class LibvirtDriver(driver.ComputeDriver):
         root_fname = hashlib.sha1(str(disk_images['image_id'])).hexdigest()
         size = instance['root_gb'] * 1024 * 1024 * 1024
 
+        # check for root device size in block_device_mapping, if exists
+        try:
+            for bdm in db.block_device_mapping_get_all_by_instance(context, instance['uuid']):
+                if bdm['device_name'] in ['/dev/vda', '/dev/vda1', '/dev/sda', '/dev/sda1', 'vda1', 'sda1', 'vda', 'sda' ]:
+                    size = bdm['volume_size'] * 1024 * 1024 * 1024
+                    break
+                else:
+                    continue
+        except:
+            LOG.debug(_("Some error in root block device mapping check."))
+
+        LOG.info(_("Root volume size: %s"), size)
+
         inst_type_id = instance['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
         if size == 0 or suffix == '.rescue':
