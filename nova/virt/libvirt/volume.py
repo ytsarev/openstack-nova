@@ -26,6 +26,7 @@ from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.libvirt import config
 from nova.virt.libvirt import utils as virtutils
+from nova.api.ec2 import ec2utils
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
@@ -48,6 +49,23 @@ class LibvirtVolumeDriver(object):
         conf.target_dev = mount_device
         conf.target_bus = "virtio"
         conf.serial = connection_info.get('serial')
+
+        volume_id = connection_info['data']['volume_id']
+
+        # TODO: ec2_volume_id have to be computed from FLAGS.volume_name_template
+        local_volume_ec2id = "/dev/%s/%s" % (FLAGS.volume_group, ec2utils.id_to_ec2_vol_id(volume_id))
+
+        local_volume_uuid = "/dev/%s/%s" % (FLAGS.volume_group, FLAGS.volume_name_template)
+        local_volume_uuid = local_volume_uuid % volume_id
+        is_local_volume_ec2id = os.path.islink(local_volume_ec2id)
+        is_local_volume_uuid = os.path.islink(local_volume_uuid)
+
+        if is_local_volume_uuid:
+             conf.source_path = local_volume_uuid
+        elif is_local_volume_ec2id:
+             conf.source_path = local_volume_ec2id
+        else:
+             LOG.debug("Attaching device %s as %s" % (conf.source_path, mount_device))
         return conf
 
     def disconnect_volume(self, connection_info, mount_device):
