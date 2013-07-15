@@ -447,10 +447,16 @@ class ComputeManager(manager.SchedulerDependentManager):
                     volume = self.volume_api.get(context, vol['id'])
                     if volume['status'] != 'creating':
                         break
-                    greenthread.sleep(1)
+                    greenthread.sleep(2)
+
                 self.db.block_device_mapping_update(
                     context, bdm['id'], {'volume_id': vol['id']})
                 bdm['volume_id'] = vol['id']
+
+                volume = self.volume_api.get(context, vol['id'])
+                LOG.info(_('Block device mapping - Volume from Snapshot status: "%s"'), volume['status'])
+                LOG.debug(_('Block device mapping - Volume from Snapshot: %r'), volume)
+                greenthread.sleep(2)
 
             if bdm['volume_id'] is not None:
                 volume = self.volume_api.get(context, bdm['volume_id'])
