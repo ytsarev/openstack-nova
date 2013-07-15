@@ -103,12 +103,13 @@ def _parse_block_device_mapping(bdm):
     ebs = bdm.pop('ebs', None)
     if ebs:
         ec2_id = ebs.pop('snapshot_id', None)
-        if ec2_id:
-            id = ec2utils.ec2_vol_id_to_uuid(ec2_id)
-            if ec2_id.startswith('snap-'):
-                bdm['snapshot_id'] = id
-            elif ec2_id.startswith('vol-'):
-                bdm['volume_id'] = id
+	if ec2_id:
+	    snaptpl=FLAGS.snapshot_name_template.split('%')[0]
+            volutpl=FLAGS.volume_name_template.split('%')[0]
+            if ec2_id.startswith(snaptpl):
+		bdm['snapshot_id'] = ec2utils.ec2_snap_id_to_uuid(ec2_id)
+	    elif ec2_id.startswith(volutpl):
+		bdm['volume_id'] = ec2utils.ec2_vol_id_to_uuid(ec2_id)
             ebs.setdefault('delete_on_termination', True)
         bdm.update(ebs)
     return bdm
