@@ -370,8 +370,6 @@ class IptablesFirewallDriver(FirewallDriver):
                                                           security_group['id'])
 
             for rule in rules:
-                LOG.debug(_('Adding security group rule: %r'), rule,
-                          instance=instance)
 
                 if not rule.cidr:
                     version = 4
@@ -412,13 +410,9 @@ class IptablesFirewallDriver(FirewallDriver):
                             except:
                                 ips = []
                             
-                            LOG.debug('ips: %r', ips)
-                            
                             for ip in ips:
                                 subrule = args + ['-s %s' % ip]
                                 fw_rules += [' '.join(subrule)]
-
-                LOG.debug('Using fw_rules: %r', fw_rules, instance=instance)
 
         ipv4_rules += ['-j $sg-fallback']
         ipv6_rules += ['-j $sg-fallback']
