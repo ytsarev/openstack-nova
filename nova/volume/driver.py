@@ -268,19 +268,6 @@ class VolumeDriver(object):
             # If the volume isn't present, then don't attempt to delete
             return True
 
-        # TODO(yamahata): lvm can't delete origin volume only without
-        # deleting derived snapshots. Can we do something fancy?
-        out, err = self._execute('lvdisplay', '--noheading',
-                                 '-C', '-o', 'Attr',
-                                 '%s/%s' % (FLAGS.volume_group,
-                                            volume['name']),
-                                 run_as_root=True)
-        # fake_execute returns None resulting unit test error
-        if out:
-            out = out.strip()
-            if (out[0] == 'o') or (out[0] == 'O'):
-                raise exception.VolumeIsBusy(volume_name=volume['name'])
-
         self._delete_volume(volume, volume['size'])
 
     def create_snapshot(self, snapshot):
