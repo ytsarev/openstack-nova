@@ -614,15 +614,19 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         lun = self._lookup_lun_for_volume(name, project)
         return {'provider_location': lun.id}
 
-    def ensure_export(self, context, volume):
+    def ensure_export(self, context, volume, host=None):
         """Driver entry point to get the export info for an existing volume."""
+        if hasattr(volume, 'volume_id'):        # if 'volume' is a snapshot
+            return None
         return self._get_export(volume)
 
-    def create_export(self, context, volume):
+    def create_export(self, context, volume, host=None):
         """Driver entry point to get the export info for a new volume."""
+        if hasattr(volume, 'volume_id'):        # if 'volume' is a snapshot
+            return None
         return self._get_export(volume)
 
-    def remove_export(self, context, volume):
+    def remove_export(self, context, volume, host=None):
         """Driver exntry point to remove an export for a volume.
 
         Since exporting is idempotent in this driver, we have nothing
