@@ -65,8 +65,8 @@ disk_opts = [
     #
     cfg.MultiStrOpt('virt_mkfs',
                     default=[
-                      'default=mkfs.ext3 -L %(fs_label)s -F %(target)s',
-                      'linux=mkfs.ext3 -L %(fs_label)s -F %(target)s',
+                      'default=mkfs.ext4 -L %(fs_label)s -F %(target)s',
+                      'linux=mkfs.ext4 -L %(fs_label)s -F %(target)s',
                       'windows=mkfs.ntfs'
                       ' --force --fast --label %(fs_label)s %(target)s',
                       # NOTE(yamahata): vfat case
