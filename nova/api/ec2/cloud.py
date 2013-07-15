@@ -24,6 +24,7 @@ datastore.
 
 import base64
 import time
+import functools
 
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
@@ -39,6 +40,7 @@ from nova.image import s3
 from nova import network
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
+import nova.policy
 from nova import quota
 from nova import utils
 from nova import volume
@@ -78,6 +80,26 @@ _STATE_DESCRIPTION_MAP = {
     vm_states.RESIZED: inst_state.RESIZE,
 }
 
+def wrap_check_policy(func):
+    """Check policy corresponding to the wrapped methods prior to execution
+
+    This decorator requires the first 2 args of the wrapped function
+    to be (self, context)
+    """
+    @functools.wraps(func)
+    def wrapped(self, context, **kwargs):
+        check_policy(context, func.__name__)
+        return func(self, context, **kwargs)
+
+    return wrapped
+
+def check_policy(context, action):
+    target = {
+        'project_id': context.project_id,
+        'user_id': context.user_id,
+    }
+    _action = 'ec2:%s' % action
+    nova.policy.enforce(context, _action, target)
 
 def _state_description(vm_state, _shutdown_terminate):
     """Map the vm state to the server status string"""
@@ -200,6 +222,7 @@ class CloudController(object):
             state = 'available'
         return image['properties'].get('image_state', state)
 
+    @wrap_check_policy
     def describe_availability_zones(self, context, **kwargs):
         if ('zone_name' in kwargs and
             'verbose' in kwargs['zone_name'] and
@@ -282,6 +305,7 @@ class CloudController(object):
 
         return {'availabilityZoneInfo': result}
 
+    @wrap_check_policy
     def describe_regions(self, context, region_name=None, **kwargs):
         if FLAGS.region_list:
             regions = []
@@ -301,6 +325,7 @@ class CloudController(object):
                                                             FLAGS.ec2_path)}]
         return {'regionInfo': regions}
 
+    @wrap_check_policy
     def describe_snapshots(self,
                            context,
                            snapshot_id=None,
@@ -332,6 +357,7 @@ class CloudController(object):
         s['description'] = snapshot['display_description']
         return s
 
+    @wrap_check_policy
     def create_snapshot(self, context, volume_id, **kwargs):
         validate_ec2_id(volume_id)
         LOG.audit(_("Create snapshot of volume %s"), volume_id,
@@ -347,12 +373,14 @@ class CloudController(object):
         db.ec2_snapshot_create(context, snapshot['id'])
         return self._format_snapshot(context, snapshot)
 
+    @wrap_check_policy
     def delete_snapshot(self, context, snapshot_id, **kwargs):
         snapshot_id = ec2utils.ec2_snap_id_to_uuid(snapshot_id)
         snapshot = self.volume_api.get_snapshot(context, snapshot_id)
         self.volume_api.delete_snapshot(context, snapshot)
         return True
 
+    @wrap_check_policy
     def describe_key_pairs(self, context, key_name=None, **kwargs):
         key_pairs = self.keypair_api.get_key_pairs(context, context.user_id)
         if not key_name is None:
@@ -375,6 +403,7 @@ class CloudController(object):
 
         return {'keySet': result}
 
+    @wrap_check_policy
     def create_key_pair(self, context, key_name, **kwargs):
         LOG.audit(_("Create key pair %s"), key_name, context=context)
 
@@ -396,6 +425,7 @@ class CloudController(object):
                 'keyMaterial': keypair['private_key']}
         # TODO(vish): when context is no longer an object, pass it here
 
+    @wrap_check_policy
     def import_key_pair(self, context, key_name, public_key_material,
                         **kwargs):
         LOG.audit(_("Import key %s"), key_name, context=context)
@@ -420,6 +450,7 @@ class CloudController(object):
         return {'keyName': key_name,
                 'keyFingerprint': keypair['fingerprint']}
 
+    @wrap_check_policy
     def delete_key_pair(self, context, key_name, **kwargs):
         LOG.audit(_("Delete key pair %s"), key_name, context=context)
         try:
@@ -430,6 +461,7 @@ class CloudController(object):
             pass
         return True
 
+    @wrap_check_policy
     def describe_security_groups(self, context, group_name=None, group_id=None,
                                  **kwargs):
         search_opts = ec2utils.search_opts_from_filters(kwargs.get('filter'))
@@ -571,6 +603,7 @@ class CloudController(object):
             err = _("Invalid IP protocol %(protocol)s.") % locals()
             raise exception.EC2APIError(message=err, code="400")
 
+    @wrap_check_policy
     def revoke_security_group_ingress(self, context, group_name=None,
                                       group_id=None, **kwargs):
         self._validate_group_identifier(group_name, group_id)
@@ -649,6 +682,7 @@ class CloudController(object):
 
         return source_project_id
 
+    @wrap_check_policy
     def create_security_group(self, context, group_name, group_description):
         if isinstance(group_name, unicode):
             group_name = group_name.encode('utf-8')
@@ -673,6 +707,7 @@ class CloudController(object):
         return {'securityGroupSet': [self._format_security_group(context,
                                                                  group_ref)]}
 
+    @wrap_check_policy
     def delete_security_group(self, context, group_name=None, group_id=None,
                               **kwargs):
         if not group_name and not group_id:
@@ -686,6 +721,7 @@ class CloudController(object):
 
         return True
 
+    @wrap_check_policy
     def get_console_output(self, context, instance_id, **kwargs):
         LOG.audit(_("Get console output for instance %s"), instance_id,
                   context=context)
@@ -703,6 +739,7 @@ class CloudController(object):
                 "Timestamp": now,
                 "output": base64.b64encode(output)}
 
+    @wrap_check_policy
     def describe_volumes(self, context, volume_id=None, **kwargs):
         if volume_id:
             volumes = []
@@ -758,6 +795,7 @@ class CloudController(object):
 
         return v
 
+    @wrap_check_policy
     def create_volume(self, context, **kwargs):
         snapshot_ec2id = kwargs.get('snapshot_id', None)
         if snapshot_ec2id is not None:
@@ -788,6 +826,7 @@ class CloudController(object):
         #             a dict to avoid an error.
         return self._format_volume(context, dict(volume))
 
+    @wrap_check_policy
     def delete_volume(self, context, volume_id, **kwargs):
         validate_ec2_id(volume_id)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
@@ -799,6 +838,7 @@ class CloudController(object):
 
         return True
 
+    @wrap_check_policy
     def attach_volume(self, context,
                       volume_id,
                       instance_id,
@@ -826,6 +866,7 @@ class CloudController(object):
                 'status': volume['attach_status'],
                 'volumeId': ec2utils.id_to_ec2_vol_id(volume_id)}
 
+    @wrap_check_policy
     def detach_volume(self, context, volume_id, **kwargs):
         validate_ec2_id(volume_id)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
@@ -858,6 +899,7 @@ class CloudController(object):
         result[key] = ec2utils.glance_id_to_ec2_id(context, ramdisk_uuid,
                                                    'ari')
 
+    @wrap_check_policy
     def describe_instance_attribute(self, context, instance_id, attribute,
                                     **kwargs):
         def _unsupported_attribute(instance, result):
@@ -927,12 +969,14 @@ class CloudController(object):
         fn(instance, result)
         return result
 
+    @wrap_check_policy
     def describe_instances(self, context, **kwargs):
         # Optional DescribeInstances argument
         instance_id = kwargs.get('instance_id', None)
         return self._format_describe_instances(context,
                 instance_id=instance_id)
 
+    @wrap_check_policy
     def describe_instances_v6(self, context, **kwargs):
         # Optional DescribeInstancesV6 argument
         instance_id = kwargs.get('instance_id', None)
@@ -1106,6 +1150,7 @@ class CloudController(object):
 
         return list(reservations.values())
 
+    @wrap_check_policy
     def describe_addresses(self, context, public_ip=None, **kwargs):
         if public_ip:
             floatings = []
@@ -1133,6 +1178,7 @@ class CloudController(object):
             address['instance_id'] = details
         return address
 
+    @wrap_check_policy
     def allocate_address(self, context, **kwargs):
         LOG.audit(_("Allocate address"), context=context)
         try:
@@ -1141,6 +1187,7 @@ class CloudController(object):
             raise exception.EC2APIError(_('No more floating IPs available'))
         return {'publicIp': public_ip}
 
+    @wrap_check_policy
     def release_address(self, context, public_ip, **kwargs):
         LOG.audit(_("Release address %s"), public_ip, context=context)
         try:
@@ -1149,6 +1196,7 @@ class CloudController(object):
         except exception.FloatingIpNotFound:
             raise exception.EC2APIError(_('Unable to release IP Address.'))
 
+    @wrap_check_policy
     def associate_address(self, context, instance_id, public_ip, **kwargs):
         LOG.audit(_("Associate address %(public_ip)s to"
                 " instance %(instance_id)s") % locals(), context=context)
@@ -1185,6 +1233,7 @@ class CloudController(object):
             LOG.exception(msg)
             raise exception.EC2APIError(msg)
 
+    @wrap_check_policy
     def disassociate_address(self, context, public_ip, **kwargs):
         instance_id = self.network_api.get_instance_id_by_floating_address(
                                                          context, public_ip)
@@ -1202,6 +1251,7 @@ class CloudController(object):
 
         return {'return': "true"}
 
+    @wrap_check_policy
     def run_instances(self, context, **kwargs):
         min_count = int(kwargs.get('min_count', 1))
         if kwargs.get('kernel_id'):
@@ -1252,6 +1302,7 @@ class CloudController(object):
             instances.append(instance)
         return instances
 
+    @wrap_check_policy
     def terminate_instances(self, context, instance_id, **kwargs):
         """Terminate each instance in instance_id, which is a list of ec2 ids.
         instance_id is a kwarg so its name cannot be modified."""
@@ -1263,6 +1314,7 @@ class CloudController(object):
                                                 instance_id,
                                                 previous_states)
 
+    @wrap_check_policy
     def reboot_instances(self, context, instance_id, **kwargs):
         """instance_id is a list of instance ids"""
         instances = self._ec2_ids_to_instances(context, instance_id)
@@ -1271,6 +1323,7 @@ class CloudController(object):
             self.compute_api.reboot(context, instance, 'HARD')
         return True
 
+    @wrap_check_policy
     def stop_instances(self, context, instance_id, **kwargs):
         """Stop each instances in instance_id.
         Here instance_id is a list of instance ids"""
@@ -1280,6 +1333,7 @@ class CloudController(object):
             self.compute_api.stop(context, instance)
         return True
 
+    @wrap_check_policy
     def start_instances(self, context, instance_id, **kwargs):
         """Start each instances in instance_id.
         Here instance_id is a list of instance ids"""
@@ -1359,6 +1413,7 @@ class CloudController(object):
 
         return i
 
+    @wrap_check_policy
     def describe_images(self, context, image_id=None, **kwargs):
         # NOTE: image_id is a list!
         if image_id:
@@ -1374,6 +1429,7 @@ class CloudController(object):
         images = [self._format_image(i) for i in images]
         return {'imagesSet': images}
 
+    @wrap_check_policy
     def deregister_image(self, context, image_id, **kwargs):
         LOG.audit(_("De-registering image %s"), image_id, context=context)
         image = self._get_image(context, image_id)
@@ -1387,6 +1443,7 @@ class CloudController(object):
         image_id = ec2utils.image_ec2_id(image['id'], image_type)
         return image_id
 
+    @wrap_check_policy
     def register_image(self, context, image_location=None, **kwargs):
         if image_location is None and kwargs.get('name'):
             image_location = kwargs['name']
@@ -1415,6 +1472,7 @@ class CloudController(object):
         LOG.audit(msg, context=context)
         return {'imageId': image_id}
 
+    @wrap_check_policy
     def describe_image_attribute(self, context, image_id, attribute, **kwargs):
         def _block_device_mapping_attribute(image, result):
             _format_mappings(image['properties'], result)
@@ -1465,6 +1523,7 @@ class CloudController(object):
         fn(image, result)
         return result
 
+    @wrap_check_policy
     def modify_image_attribute(self, context, image_id, attribute,
                                operation_type, **kwargs):
         # TODO(devcamcar): Support users and groups other than 'all'.
@@ -1504,6 +1563,7 @@ class CloudController(object):
     # manipulating instances/volumes/snapshots.
     # As other code doesn't take it into consideration, here we don't
     # care of it for now. Ostrich algorithm
+    @wrap_check_policy
     def create_image(self, context, instance_id, **kwargs):
         # NOTE(yamahata): name/description are ignored by register_image(),
         #                 do so here
