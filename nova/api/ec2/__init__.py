@@ -89,6 +89,19 @@ def ec2_error(req, request_id, code, message):
                       utils.xhtml_escape(utils.utf8(request_id))))
     return resp
 
+def ec2_access_denied(req, request_id, code, message):
+    """Helper to send an ec2_compatible unauthorized"""
+    LOG.debug(_('%(code)s: %(message)s') % locals())
+    resp = webob.Response()
+    resp.status = 403
+    resp.headers['Content-Type'] = 'text/xml'
+    resp.body = str('<?xml version="1.0"?>\n'
+                     '<Response><Errors><Error><Code>Unauthorized</Code>'
+                     '<Message>%s</Message></Error></Errors>'
+                     '<RequestID>%s</RequestID></Response>' %
+                     (utils.xhtml_escape(utils.utf8(message)),
+                      utils.xhtml_escape(utils.utf8(request_id))))
+    return resp
 
 ## Fault Wrapper around all EC2 requests ##
 class FaultWrapper(wsgi.Middleware):
@@ -473,6 +486,10 @@ class Executor(wsgi.Application):
         result = None
         try:
             result = api_request.invoke(context)
+        except exception.PolicyNotAuthorized as ex:
+            LOG.debug(_('Access denied for user: %s'),
+                        context.user_id, context=context)
+            return ec2_access_denied(req, request_id, type(ex).__name__, unicode(ex))
         except exception.InstanceNotFound as ex:
             LOG.info(_('InstanceNotFound raised: %s'), unicode(ex),
                      context=context)
