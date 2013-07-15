@@ -1140,6 +1140,9 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
         interface = LinuxBridgeInterfaceDriver.ensure_vlan(vlan_num,
                                                bridge_interface, mac_address)
         LinuxBridgeInterfaceDriver.ensure_bridge(bridge, interface, net_attrs)
+        LOG.debug(_('Setting promisc mode on bridge %s'), bridge)
+        _execute('ip', 'link', 'set',
+                     'dev', bridge, 'promisc', 'on', run_as_root=True)
         return interface
 
     @classmethod
