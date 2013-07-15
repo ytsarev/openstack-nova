@@ -51,7 +51,7 @@ class L3Driver(object):
         """:returns: True/False (whether the driver is initialized)"""
         raise NotImplementedError()
 
-    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
+    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id, insert):
         """Add a floating IP bound to the fixed IP with an optional
            l3_interface_id.  Some drivers won't care about the
            l3_interface_id so just pass None in that case"""
@@ -99,10 +99,10 @@ class LinuxNetL3(L3Driver):
     def remove_gateway(self, network_ref):
         linux_net.unplug(network_ref)
 
-    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
+    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id, insert=False):
         linux_net.bind_floating_ip(floating_ip, l3_interface_id)
         linux_net.ensure_floating_forward(floating_ip, fixed_ip,
-                                          l3_interface_id)
+                                          l3_interface_id, insert=insert)
 
     def remove_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
         linux_net.unbind_floating_ip(floating_ip, l3_interface_id)
@@ -143,7 +143,7 @@ class NullL3(L3Driver):
     def remove_gateway(self, network_ref):
         pass
 
-    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
+    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id, insert):
         pass
 
     def remove_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
