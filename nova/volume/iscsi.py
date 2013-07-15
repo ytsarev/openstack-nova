@@ -159,11 +159,26 @@ class TgtAdm(TargetAdmin):
 
     def remove_iscsi_target(self, tid, lun, vol_id, **kwargs):
         LOG.info(_('Removing volume: %s') % vol_id)
-        vol_uuid_file = 'volume-%s' % vol_id
+        try:
+           snapshot=kwargs['issnapshot']
+        except:
+           snapshot=False
+
+        if snapshot:
+            logmsg = "Snapshot"
+            vol_uuid_file = "snap-%s" % vol_id
+        else:
+            logmsg = "Volume"
+            vol_uuid_file = FLAGS.volume_name_template % vol_id
         volume_path = os.path.join(FLAGS.volumes_dir, vol_uuid_file)
+
+        LOG.debug('%s path = %s' % (logmsg, volume_path))
+        LOG.debug('%s uuid file = %s' % (logmsg,vol_uuid_file))
+
         if os.path.isfile(volume_path):
             iqn = '%s%s' % (FLAGS.iscsi_target_prefix,
                             vol_uuid_file)
+            LOG.debug('%s iqn = %s' % (logmsg, iqn))
         else:
             raise exception.ISCSITargetRemoveFailed(volume_id=vol_id)
         try:
@@ -177,6 +192,13 @@ class TgtAdm(TargetAdmin):
             raise exception.ISCSITargetRemoveFailed(volume_id=vol_id)
 
         os.unlink(volume_path)
+
+    def delete_target_iqn(self, target_iqn=None, **kwargs):
+        if target_iqn is None:
+            raise exception.InvalidParameterValue(
+                err=_('valid iqn needed for delete_target'))
+
+        self._execute("tgt-admin", "--delete", target_iqn, run_as_root=True, **kwargs)
 
     def show_target(self, tid, iqn=None, **kwargs):
         if iqn is None:

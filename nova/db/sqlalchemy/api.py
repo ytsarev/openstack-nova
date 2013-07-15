@@ -3027,6 +3027,12 @@ def _volume_get_query(context, session=None, project_only=False):
 
 
 @require_context
+def _snapshot_get_query(context, session=None, project_only=False):
+    return model_query(context, models.Snapshot, session=session,
+                       project_only=project_only)
+
+
+@require_context
 def _ec2_volume_get_query(context, session=None):
     return model_query(context, models.VolumeIdMapping,
                        session=session, read_deleted='yes')
@@ -3046,6 +3052,17 @@ def volume_get(context, volume_id, session=None):
 
     if not result:
         raise exception.VolumeNotFound(volume_id=volume_id)
+
+    return result
+
+@require_context
+def snapshot_get(context, snapshot_id, session=None):
+    result = _snapshot_get_query(context, session=session, project_only=True).\
+                    filter_by(id=snapshot_id).\
+                    first()
+
+    if not result:
+        raise exception.SnapshotNotFound(snapshot_id=snapshot_id)
 
     return result
 
@@ -3081,10 +3098,16 @@ def volume_get_all_by_project(context, project_id):
 
 
 @require_admin_context
-def volume_get_iscsi_target_num(context, volume_id):
-    result = model_query(context, models.IscsiTarget, read_deleted="yes").\
-                     filter_by(volume_id=volume_id).\
-                     first()
+def volume_get_iscsi_target_num(context, volume_id, host = "all"):
+    if host != "all":
+        result = model_query(context, models.IscsiTarget, read_deleted="yes").\
+                        filter_by(volume_id=volume_id).\
+                        filter_by(host=host).\
+                        first()
+    else:
+        result = model_query(context, models.IscsiTarget, read_deleted="yes").\
+                        filter_by(volume_id=volume_id).\
+                        first()
 
     if not result:
         raise exception.ISCSITargetNotFoundForVolume(volume_id=volume_id)
@@ -3281,11 +3304,17 @@ def snapshot_create(context, values):
 def snapshot_destroy(context, snapshot_id):
     session = get_session()
     with session.begin():
+        snapshot_ref = snapshot_get(context, snapshot_id, session=session)
         session.query(models.Snapshot).\
                 filter_by(id=snapshot_id).\
                 update({'deleted': True,
                         'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
+        session.query(models.IscsiTarget).\
+                filter_by(volume_id=snapshot_id).\
+                update({'snapshot_id': None})
+
+    return snapshot_ref
 
 
 @require_context
@@ -3299,6 +3328,49 @@ def snapshot_get(context, snapshot_id, session=None):
         raise exception.SnapshotNotFound(snapshot_id=snapshot_id)
 
     return result
+
+
+#@require_admin_context
+#@require_context
+# context removed due to "AttributeError: 'ISCSIDriver' object has no attribute 'is_admin'"
+def snapshot_get_all_by_host(context, host):
+    session = get_session()
+    my_filter = and_(or_(models.Snapshot.status == 'available',
+                         models.Snapshot.status == 'error'),
+                     models.Snapshot.deleted == False,
+                     models.Volume.host == host)
+    with session.begin():
+        results = session.query(models.Snapshot).\
+                         join((models.Volume,
+                               models.Volume.id==models.Snapshot.volume_id)).\
+                         filter(my_filter).\
+                         all()
+        return results
+
+
+#@require_admin_context
+#@require_context
+# context removed due to "AttributeError: 'ISCSIDriver' object has no attribute 'is_admin'"
+def snapshot_get_host(context, snapshot_id):
+    session = get_session()
+    my_filter = and_(or_(models.Snapshot.status == 'available',
+                         models.Snapshot.status == 'error',
+                         models.Snapshot.status == 'deleting',
+                         models.Snapshot.status == 'error_deleting'),
+                     models.Snapshot.id==snapshot_id,
+                     models.Snapshot.deleted == False)
+    with session.begin():
+        results = session.query(models.Volume.host).\
+                         join((models.Snapshot,
+                               models.Volume.id==models.Snapshot.volume_id)).\
+                         filter(my_filter).\
+                         first()
+        try:
+             result = results[0]
+        except:
+             result = Null
+
+        return result
 
 
 @require_admin_context
