@@ -628,6 +628,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.os_cmdline = "console=xvc0"
         obj.acpi = True
         obj.apic = True
+        obj.pae = True
 
         disk = config.LibvirtConfigGuestDisk()
         disk.source_type = "file"
@@ -653,6 +654,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               <features>
                 <acpi/>
                 <apic/>
+                <pae/>
               </features>
               <devices>
                 <disk type="file" device="disk">
@@ -673,6 +675,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.os_boot_dev = "hd"
         obj.acpi = True
         obj.apic = True
+        obj.pae = True
 
         disk = config.LibvirtConfigGuestDisk()
         disk.source_type = "file"
@@ -696,6 +699,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               <features>
                 <acpi/>
                 <apic/>
+                <pae/>
               </features>
               <devices>
                 <disk type="file" device="disk">
