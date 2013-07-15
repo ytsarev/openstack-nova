@@ -36,6 +36,8 @@ from nova.volume import iscsi
 from nova import db
 from socket import gethostbyname
 
+from nova.api.ec2 import ec2utils
+
 LOG = logging.getLogger(__name__)
 
 volume_opts = [
@@ -149,19 +151,24 @@ class VolumeDriver(object):
             return True
         return False
 
-    def _delete_volume(self, volume, size_in_g):
+    def _delete_volume(self, volume, size_in_g, ec2id = None):
         """Deletes a logical volume."""
         # zero out old volumes to prevent data leaking between users
         # TODO(ja): reclaiming space should be done lazy and low priority
-        self._copy_volume('/dev/zero', self.local_path(volume), size_in_g)
-        dev_path = self.local_path(volume)
+
+        dev_path = self.local_path(volume, ec2id)
+        self._copy_volume('/dev/zero', dev_path, size_in_g)
+
         if os.path.exists(dev_path):
             self._try_execute('dmsetup', 'remove', '-f', dev_path,
                               run_as_root=True)
+
+        if ec2id == None:
+            escape_snapshot = self._escape_snapshot(volume['name'])
+        else:
+            escape_snapshot = self._escape_snapshot(ec2id)
         self._try_execute('lvremove', '-f', "%s/%s" %
-                          (FLAGS.volume_group,
-                           self._escape_snapshot(volume['name'])),
-                          run_as_root=True)
+                          (FLAGS.volume_group, escape_snapshot), run_as_root=True)
 
     def _sizestr(self, size_in_g):
         if int(size_in_g) == 0:
@@ -264,11 +271,44 @@ class VolumeDriver(object):
 
     def delete_volume(self, volume):
         """Deletes a logical volume."""
-        if self._volume_not_present(volume['name']):
-            # If the volume isn't present, then don't attempt to delete
-            return True
+        
+        vol_uuid_prefix = FLAGS.volume_name_template.split("%")[0]
+        vol_uuid = volume['name'].split(vol_uuid_prefix)[1]
+        ec2id = ec2utils.id_to_ec2_vol_id(vol_uuid)
 
-        self._delete_volume(volume, volume['size'])
+        try:
+    	    if not self._volume_not_present(volume['name']):
+                LOG.debug("Found new UUID volume device\n")
+                self._delete_volume(volume, volume['size'])
+            else:
+                raise Exception
+        except:    
+            try:
+                LOG.debug("Going to try EC2 ID volume device\n")
+                volumefound = self._volume_not_present(ec2id)
+                if volumefound:
+                    LOG.debug("Even EC2 ID %s volume device not found, weird.\n" % ec2id)                
+                else:
+                    LOG.debug("Found legacy EC2 ID volume device\n")
+                    
+                    #we have to remove iscsi export for EC2 target
+                    iqn = '%s%s' % (FLAGS.iscsi_target_prefix, ec2id)
+                    LOG.debug("Removing legacy EC2 IQN: %s\n" % iqn)
+                    try:
+                        self.tgtadm.delete_target_iqn(iqn)
+                    except:
+                        pass
+
+                    volume_path = os.path.join(FLAGS.volumes_dir, ec2id)
+                    try:
+                         os.unlink(volume_path)
+                    except:
+                         pass
+                    
+                    self._delete_volume(volume, volume['size'], ec2id)
+            except Exception as e:        
+                # If the volume isn't present, then don't attempt to delete
+                return True
 
     def create_snapshot(self, snapshot):
         """Creates a snapshot."""
@@ -288,10 +328,13 @@ class VolumeDriver(object):
         # it's quite slow.
         self._delete_volume(snapshot, snapshot['volume_size'])
 
-    def local_path(self, volume):
+    def local_path(self, volume,ec2id = None):
         # NOTE(vish): stops deprecation warning
         escaped_group = FLAGS.volume_group.replace('-', '--')
-        escaped_name = self._escape_snapshot(volume['name']).replace('-', '--')
+        if ec2id == None:
+            escaped_name = self._escape_snapshot(volume['name']).replace('-', '--')
+        else:
+            escaped_name = self._escape_snapshot(ec2id).replace('-', '--')
         return "/dev/mapper/%s-%s" % (escaped_group, escaped_name)
 
     def ensure_export(self, context, volume):
