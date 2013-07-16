@@ -198,7 +198,7 @@ class IptablesTable(object):
                                         self.rules)
         self.rules = filter(lambda r: jump_snippet not in r.rule, self.rules)
 
-    def add_rule(self, chain, rule, wrap=True, top=False):
+    def add_rule(self, chain, rule, wrap=True, top=False, insert=False):
         """Add a rule to the table.
 
         This is just like what you'd feed to iptables, just without
@@ -215,7 +215,10 @@ class IptablesTable(object):
         if '$' in rule:
             rule = ' '.join(map(self._wrap_target_chain, rule.split(' ')))
 
-        self.rules.append(IptablesRule(chain, rule, wrap, top))
+        if insert == True:
+            self.rules.insert(0,IptablesRule(chain, rule, wrap, top))
+        else:
+            self.rules.append(IptablesRule(chain, rule, wrap, top))
 
     def _wrap_target_chain(self, s):
         if s.startswith('$'):
@@ -622,10 +625,10 @@ def ensure_vpn_forward(public_ip, port, private_ip):
     iptables_manager.apply()
 
 
-def ensure_floating_forward(floating_ip, fixed_ip, device):
+def ensure_floating_forward(floating_ip, fixed_ip, device, insert=False):
     """Ensure floating ip forwarding rule."""
     for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
-        iptables_manager.ipv4['nat'].add_rule(chain, rule)
+        iptables_manager.ipv4['nat'].add_rule(chain, rule, insert=insert)
     iptables_manager.apply()
 
 
@@ -638,8 +641,6 @@ def remove_floating_forward(floating_ip, fixed_ip, device):
 
 def floating_forward_rules(floating_ip, fixed_ip, device):
     rule = '-s %s -j SNAT --to %s' % (fixed_ip, floating_ip)
-    if device:
-        rule += ' -o %s' % device
     return [('PREROUTING', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)),
             ('OUTPUT', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)),
             ('float-snat', rule)]
@@ -1140,6 +1141,9 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
         interface = LinuxBridgeInterfaceDriver.ensure_vlan(vlan_num,
                                                bridge_interface, mac_address)
         LinuxBridgeInterfaceDriver.ensure_bridge(bridge, interface, net_attrs)
+        LOG.debug(_('Setting promisc mode on bridge %s'), bridge)
+        _execute('ip', 'link', 'set',
+                     'dev', bridge, 'promisc', 'on', run_as_root=True)
         return interface
 
     @classmethod

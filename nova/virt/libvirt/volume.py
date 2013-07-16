@@ -26,6 +26,7 @@ from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.libvirt import config
 from nova.virt.libvirt import utils as virtutils
+from nova.api.ec2 import ec2utils
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
@@ -48,6 +49,23 @@ class LibvirtVolumeDriver(object):
         conf.target_dev = mount_device
         conf.target_bus = "virtio"
         conf.serial = connection_info.get('serial')
+
+        volume_id = connection_info['data']['volume_id']
+
+        # TODO: ec2_volume_id have to be computed from FLAGS.volume_name_template
+        local_volume_ec2id = "/dev/%s/%s" % (FLAGS.volume_group, ec2utils.id_to_ec2_vol_id(volume_id))
+
+        local_volume_uuid = "/dev/%s/%s" % (FLAGS.volume_group, FLAGS.volume_name_template)
+        local_volume_uuid = local_volume_uuid % volume_id
+        is_local_volume_ec2id = os.path.islink(local_volume_ec2id)
+        is_local_volume_uuid = os.path.islink(local_volume_uuid)
+
+        if is_local_volume_uuid:
+             conf.source_path = local_volume_uuid
+        elif is_local_volume_ec2id:
+             conf.source_path = local_volume_ec2id
+        else:
+             LOG.debug("Attaching device %s as %s" % (conf.source_path, mount_device))
         return conf
 
     def disconnect_volume(self, connection_info, mount_device):
@@ -156,6 +174,21 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
                          iscsi_properties['target_iqn'],
                          iscsi_properties.get('target_lun', 0)))
 
+	volume_id = connection_info['data']['volume_id']
+	device_ec2id = "/dev/%s/%s" % (FLAGS.volume_group, ec2utils.id_to_ec2_vol_id(volume_id))
+	
+        # we've just found that old EC2 id based device of volume exist, that's very likely a 
+        # migrated volume and it is worth to use it instead of new uuid based device which 
+        # could not exist at all
+        if os.path.exists(device_ec2id):
+	    target_iqn = 'iqn.2010-10.org.openstack:%s' % FLAGS.volume_name_template
+	    target_iqn = target_iqn % device_ec2id
+	    host_device = device_ec2id
+	    iscsi_properties['target_iqn']=target_iqn
+	    
+	    msg = 'Found EC2 volume ID: %s, attaching pre-migration volume' % (device_ec2id)
+	    LOG.debug(msg)
+
         # The /dev/disk/by-path/... node is not always present immediately
         # TODO(justinsb): This retry-with-delay is a pattern, move to utils?
         tries = 0
@@ -204,3 +237,14 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
                                check_exit_code=[0, 21, 255])
             self._run_iscsiadm(iscsi_properties, ('--op', 'delete'),
                                check_exit_code=[0, 21, 255])
+        else:
+            # can't close the session, at least delete the device for disconnected vol
+            if not 'target_lun' in iscsi_properties:
+                return
+            host_device = device_prefix+str(iscsi_properties['target_lun'])
+            device_shortname = os.path.basename(os.path.realpath(host_device))
+            delete_ctl_file = '/sys/block/'+device_shortname+'/device/delete'
+            if os.path.exists(delete_ctl_file):
+                # echo 1 > /sys/block/sdX/device/delete
+                utils.execute('cp', '/dev/stdin', delete_ctl_file,
+                              process_input='1', run_as_root=True)

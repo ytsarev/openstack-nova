@@ -214,6 +214,12 @@ class Lvm(Image):
                                            size, sparse=self.sparse)
             with self.remove_volume_on_error(self.path):
                 prepare_template(target=self.path, *args, **kwargs)
+
+            # TODO: fs_format depend on used OS at guest
+            fs_format = FLAGS.default_ephemeral_format
+            (out, err) = utils.execute('mkfs', '-t', fs_format, '-F', '-L', 'ephemeral0', '/dev/%s/%s' % (self.vg, self.lv),
+                                       run_as_root=True,
+                                       check_exit_code=0)
         else:
             prepare_template(target=base, *args, **kwargs)
             with self.remove_volume_on_error(self.path):

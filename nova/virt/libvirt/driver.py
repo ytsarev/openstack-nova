@@ -100,6 +100,9 @@ libvirt_opts = [
                default='kvm',
                help='Libvirt domain type (valid options are: '
                     'kvm, lxc, qemu, uml, xen)'),
+    cfg.StrOpt('libvirt_hugepages',
+               default=False,
+               help='Libvirt hugepages memory backed'),
     cfg.StrOpt('libvirt_uri',
                default='',
                help='Override the default libvirt URI '
@@ -455,6 +458,20 @@ class LibvirtDriver(driver.ComputeDriver):
         # Otherwise, destroy it
         if virt_dom is not None:
             try:
+                if FLAGS.libvirt_type != 'lxc':
+                    virt_dom.shutdown()
+
+                    for x in xrange(FLAGS.libvirt_wait_soft_reboot_seconds):
+                        (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
+                        state = LIBVIRT_POWER_STATE[state]
+                        LOG.debug(_("Instance shutdown status: %s"), state)
+                        if state in [power_state.SHUTDOWN,power_state.CRASHED]:
+                            LOG.info(_("Instance shutdown successfully."),
+                                     instance=instance)
+                            break
+                        else:
+                            greenthread.sleep(1)
+
                 virt_dom.destroy()
             except libvirt.libvirtError as e:
                 is_okay = False
@@ -1349,6 +1366,19 @@ class LibvirtDriver(driver.ComputeDriver):
         root_fname = hashlib.sha1(str(disk_images['image_id'])).hexdigest()
         size = instance['root_gb'] * 1024 * 1024 * 1024
 
+        # check for root device size in block_device_mapping, if exists
+        try:
+            for bdm in db.block_device_mapping_get_all_by_instance(context, instance['uuid']):
+                if bdm['device_name'] in ['/dev/vda', '/dev/vda1', '/dev/sda', '/dev/sda1', 'vda1', 'sda1', 'vda', 'sda' ]:
+                    size = bdm['volume_size'] * 1024 * 1024 * 1024
+                    break
+                else:
+                    continue
+        except:
+            LOG.debug(_("Some error in root block device mapping check."))
+
+        LOG.info(_("Root volume size: %s"), size)
+
         inst_type_id = instance['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
         if size == 0 or suffix == '.rescue':
@@ -1800,6 +1830,11 @@ class LibvirtDriver(driver.ComputeDriver):
         if FLAGS.libvirt_type != "lxc" and FLAGS.libvirt_type != "uml":
             guest.acpi = True
             guest.apic = True
+            if instance['architecture'] == "i686":
+                guest.pae = True
+
+        if FLAGS.libvirt_hugepages == True:
+            guest.hugepages = True
 
         clk = config.LibvirtConfigGuestClock()
         clk.offset = "utc"
@@ -2035,8 +2070,18 @@ class LibvirtDriver(driver.ComputeDriver):
         :returns: the total amount of memory(MB).
 
         """
+        if FLAGS.libvirt_hugepages:
+            if sys.platform.upper() not in ['LINUX2', 'LINUX3']:
+                return 0
 
-        return self._conn.getInfo()[1]
+            m = open('/proc/meminfo').read().split()
+            idx1 = m.index('HugePages_Total:')
+            idx2 = m.index('Hugepagesize:')
+
+            total_kb = int(m[idx1 + 1]) * int(m[idx2 + 1])
+            return int(total_kb / 1024)
+        else:
+            return self._conn.getInfo()[1]
 
     @staticmethod
     def get_local_gb_total():
@@ -2049,8 +2094,12 @@ class LibvirtDriver(driver.ComputeDriver):
 
         """
 
-        stats = libvirt_utils.get_fs_info(FLAGS.instances_path)
-        return stats['total'] / (1024 ** 3)
+        if FLAGS.libvirt_images_type != "lvm":
+            stats = libvirt_utils.get_fs_info(FLAGS.instances_path)
+            return stats['total'] / (1024 ** 3)
+        else:
+            out = libvirt_utils.volume_group_total_space(FLAGS.libvirt_images_volume_group)
+            return int(out / 1024 ** 3)
 
     def get_vcpu_used(self):
         """ Get vcpu usage number of physical computer.
@@ -2087,6 +2136,12 @@ class LibvirtDriver(driver.ComputeDriver):
         idx1 = m.index('MemFree:')
         idx2 = m.index('Buffers:')
         idx3 = m.index('Cached:')
+
+        if FLAGS.libvirt_hugepages:
+            idx4 = m.index('HugePages_Total:')
+            idx5 = m.index('HugePages_Free:')
+            idx6 = m.index('Hugepagesize:')
+
         if FLAGS.libvirt_type == 'xen':
             used = 0
             for domain_id in self.list_instance_ids():
@@ -2104,9 +2159,13 @@ class LibvirtDriver(driver.ComputeDriver):
             # Convert it to MB
             return used / 1024
         else:
-            avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))
-            # Convert it to MB
-            return self.get_memory_mb_total() - avail / 1024
+            if FLAGS.libvirt_hugepages:
+                used_kb = (int(m[idx4 + 1]) - int(m[idx5 + 1])) * int(m[idx6 + 1])
+                return used_kb / 1024
+            else:
+                avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))
+                # Convert it to MB
+                return self.get_memory_mb_total() - avail / 1024
 
     def get_local_gb_used(self):
         """Get the free hdd size(GB) of physical computer.
@@ -2118,8 +2177,12 @@ class LibvirtDriver(driver.ComputeDriver):
 
         """
 
-        stats = libvirt_utils.get_fs_info(FLAGS.instances_path)
-        return stats['used'] / (1024 ** 3)
+        if FLAGS.libvirt_images_type != "lvm":
+            stats = libvirt_utils.get_fs_info(FLAGS.instances_path)
+            return stats['used'] / (1024 ** 3)
+        else:
+            out = libvirt_utils.volume_group_total_space(FLAGS.libvirt_images_volume_group) - libvirt_utils.volume_group_free_space(FLAGS.libvirt_images_volume_group)
+            return int(out / 1024 ** 3)
 
     def get_hypervisor_type(self):
         """Get hypervisor type.

@@ -59,6 +59,7 @@ chown: CommandFilter, /bin/chown, root
 chmod: CommandFilter, /bin/chmod, root
 
 # nova/virt/disk/api.py: 'cp', os.path.join(fs...
+# nova/virt/libvirt/volume.py: echo 1 | cp /dev/stdin /sys/block/..
 cp: CommandFilter, /bin/cp, root
 
 # nova/virt/libvirt/vif.py: 'ip', 'tuntap', 'add', dev, 'mode', 'tap'

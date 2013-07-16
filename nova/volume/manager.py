@@ -102,10 +102,21 @@ class VolumeManager(manager.SchedulerDependentManager):
         LOG.debug(_("Re-exporting %s volumes"), len(volumes))
         for volume in volumes:
             if volume['status'] in ['available', 'in-use']:
-                self.driver.ensure_export(ctxt, volume)
+                self.driver.ensure_export(ctxt, volume, self.host)
             else:
                 LOG.info(_("volume %s: skipping export"), volume['name'])
 
+        snapshots = self.db.snapshot_get_all_by_host(ctxt, self.host)
+        LOG.debug(_("Re-exporting %s snapshots"), len(snapshots))
+        for snapshot in snapshots:
+            if snapshot['status'] == 'available':
+                 try:
+                    self.driver.ensure_export(ctxt, snapshot, self.host)
+                 except:
+                    LOG.debug(_("Re-exporting of %s snapshots failed."), snapshot['name'])
+            else:
+                LOG.info(_("snapshot %s: skipping export"), snapshot['name'])
+ 
         LOG.debug(_('Resuming any in progress delete operations'))
         for volume in volumes:
             if volume['status'] == 'deleting':
@@ -198,7 +209,7 @@ class VolumeManager(manager.SchedulerDependentManager):
             self.driver.delete_volume(volume_ref)
         except exception.VolumeIsBusy:
             LOG.debug(_("volume %s: volume is busy"), volume_ref['name'])
-            self.driver.ensure_export(context, volume_ref)
+            self.driver.ensure_export(context, volume_ref, self.host)
             self.db.volume_update(context, volume_ref['id'],
                                   {'status': 'available'})
             return True
@@ -236,6 +247,10 @@ class VolumeManager(manager.SchedulerDependentManager):
             snap_name = snapshot_ref['name']
             LOG.debug(_("snapshot %(snap_name)s: creating") % locals())
             model_update = self.driver.create_snapshot(snapshot_ref)
+
+            LOG.debug(_("snapshot %s: creating iSCSI export"), snapshot_ref['name'])
+            self.driver.create_export(context, snapshot_ref, self.host)
+
             if model_update:
                 self.db.snapshot_update(context, snapshot_ref['id'],
                                         model_update)
@@ -258,10 +273,13 @@ class VolumeManager(manager.SchedulerDependentManager):
         snapshot_ref = self.db.snapshot_get(context, snapshot_id)
 
         try:
+            LOG.debug(_("snapshot %s: removing export"), snapshot_ref['name'])
+            self.driver.remove_export(context, snapshot_ref, self.host)
             LOG.debug(_("snapshot %s: deleting"), snapshot_ref['name'])
             self.driver.delete_snapshot(snapshot_ref)
         except exception.SnapshotIsBusy:
             LOG.debug(_("snapshot %s: snapshot is busy"), snapshot_ref['name'])
+            self.driver.ensure_export(context, snapshot_ref, self.host)
             self.db.snapshot_update(context,
                                     snapshot_ref['id'],
                                     {'status': 'available'})

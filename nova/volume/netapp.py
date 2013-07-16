@@ -31,10 +31,12 @@ from suds.sax import text
 
 from nova import exception
 from nova import flags
+from nova import utils
 from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.volume import driver
 from nova.volume import volume_types
+from nova.api.ec2 import ec2utils
 
 LOG = logging.getLogger(__name__)
 
@@ -368,6 +370,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         self.discovered_datasets.append(ds)
         return ds
 
+    @utils.synchronized('dfm-edit-lock')
     def _provision(self, name, description, project, ss_type, size):
         """Provision a LUN through provisioning manager.
 
@@ -428,13 +431,15 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
             return None
         return volume_type['name']
 
+    @utils.synchronized('dfm-edit-lock')
     def _remove_destroy(self, name, project):
         """Remove the LUN from the dataset, also destroying it.
 
-        Remove the LUN from the dataset and destroy the actual LUN on the
-        storage system.
+        Remove the LUN from the dataset and destroy the actual LUN and Qtree
+        on the storage system.
         """
         lun = self._lookup_lun_for_volume(name, project)
+        lun_details = self._get_lun_details(lun.id)
         member = self.client.factory.create('DatasetMemberParameter')
         member.ObjectNameOrId = lun.id
         members = self.client.factory.create('ArrayOfDatasetMemberParameter')
@@ -445,11 +450,27 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         try:
             server.DatasetRemoveMember(EditLockId=lock_id, Destroy=True,
                                        DatasetMemberParameters=members)
+            res = server.DatasetEditCommit(EditLockId=lock_id,
+                                           AssumeConfirmation=True)
+        except (suds.WebFault, Exception):
+            server.DatasetEditRollback(EditLockId=lock_id)
+            msg = _('Failed to remove and delete dataset LUN member')
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        for info in res.JobIds.JobInfo:
+            self._wait_for_job(info.JobId)
+
+        # Note: it's not possible to delete Qtree & his LUN in one transaction
+        member.ObjectNameOrId = lun_details.QtreeId
+        lock_id = server.DatasetEditBegin(DatasetNameOrId=lun.dataset.id)
+        try:
+            server.DatasetRemoveMember(EditLockId=lock_id, Destroy=True,
+                                       DatasetMemberParameters=members)
             server.DatasetEditCommit(EditLockId=lock_id,
                                      AssumeConfirmation=True)
         except (suds.WebFault, Exception):
             server.DatasetEditRollback(EditLockId=lock_id)
-            msg = _('Failed to remove and delete dataset member')
+            msg = _('Failed to remove and delete dataset Qtree member')
             raise exception.VolumeBackendAPIException(data=msg)
 
     def create_volume(self, volume):
@@ -476,7 +497,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         self._provision(name, description, project, ss_type, size)
 
     def _lookup_lun_for_volume(self, name, project):
-        """Lookup the LUN that corresponds to the give volume.
+        """Lookup the LUN that corresponds to the given volume or snapshot.
 
         Initial lookups involve a table scan of all of the discovered LUNs,
         but later lookups are done instantly from the hashtable.
@@ -490,6 +511,24 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
             if lun.lunpath.endswith(lunpath_suffix):
                 self.lun_table[name] = lun
                 return lun
+
+        # fallback to pre-Folsom volume/snapshot names
+        if name.startswith('vol-'):
+            ec2_id = ec2utils.id_to_ec2_vol_id(name[4:])
+        elif name.startswith('snap-'):
+            ec2_id = ec2utils.id_to_ec2_snap_id(name[5:])
+        else:
+            msg = _("No entry in LUN table for volume %s") % (name)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        lunpath_suffix = '/' + ec2_id
+        for lun in self.discovered_luns:
+            if lun.dataset.project != project:
+                continue
+            if lun.lunpath.endswith(lunpath_suffix):
+                self.lun_table[name] = lun
+                return lun
+
         msg = _("No entry in LUN table for volume %s") % (name)
         raise exception.VolumeBackendAPIException(data=msg)
 
@@ -594,15 +633,19 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         lun = self._lookup_lun_for_volume(name, project)
         return {'provider_location': lun.id}
 
-    def ensure_export(self, context, volume):
+    def ensure_export(self, context, volume, host=None):
         """Driver entry point to get the export info for an existing volume."""
+        if hasattr(volume, 'volume_id'):        # if 'volume' is a snapshot
+            return None
         return self._get_export(volume)
 
-    def create_export(self, context, volume):
+    def create_export(self, context, volume, host=None):
         """Driver entry point to get the export info for a new volume."""
+        if hasattr(volume, 'volume_id'):        # if 'volume' is a snapshot
+            return None
         return self._get_export(volume)
 
-    def remove_export(self, context, volume):
+    def remove_export(self, context, volume, host=None):
         """Driver exntry point to remove an export for a volume.
 
         Since exporting is idempotent in this driver, we have nothing
@@ -870,15 +913,29 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
     def _refresh_dfm_luns(self, host_id):
         """Refresh the LUN list for one filer in DFM."""
         server = self.client.service
-        server.DfmObjectRefresh(ObjectNameOrId=host_id, ChildType='lun_path')
+        refresh_started_at = time.time()
+        monitor_names = self.client.factory.create('ArrayOfMonitorName')
+        monitor_names.MonitorName = ['file_system', 'lun']
+        server.DfmObjectRefresh(ObjectNameOrId=host_id, MonitorNames=monitor_names)
         while True:
             time.sleep(15)
             res = server.DfmMonitorTimestampList(HostNameOrId=host_id)
-            for timestamp in res.DfmMonitoringTimestamp:
-                if 'lun' != timestamp.MonitorName:
-                    continue
-                if timestamp.LastMonitoringTimestamp:
-                    return
+            timestamps = dict( (t.MonitorName, t.LastMonitoringTimestamp) for t in res.DfmMonitoringTimestamp )
+            ts_fs = timestamps['file_system']
+            ts_lun = timestamps['lun']
+
+            if ts_fs > refresh_started_at and ts_lun > refresh_started_at:
+                return          # both monitor jobs finished
+            elif ts_fs == 0 or ts_lun == 0:
+                pass            # lun or file_system is still in progress, wait
+            else:
+                monitor_names.MonitorName = []
+                if ts_fs <= refresh_started_at:
+                    monitor_names.MonitorName.append('file_system')
+                if ts_lun <= refresh_started_at:
+                    monitor_names.MonitorName.append('lun')
+                LOG.debug('Rerunning refresh for monitors: '+str(monitor_names.MonitorName))
+                server.DfmObjectRefresh(ObjectNameOrId=host_id, MonitorNames=monitor_names)
 
     def _destroy_lun(self, host_id, lun_path):
         """Destroy a LUN on the filer."""
@@ -907,6 +964,20 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
                                                 Request=request)
         self._check_fail(request, response)
 
+    @utils.synchronized('dfm-edit-lock')
+    def _resize_lun(self, lun_id, new_size):
+        """Resize LUN to the 'new_size' (GB)"""
+        server = self.client.service
+        gigabytes = 1073741824L  # 2^30
+        try:
+            res = server.LunResize(LunNameOrId=lun_id,
+                                   NewSize=(new_size * gigabytes),
+                                   ResizeUnderlyingVolume=False)
+            self._wait_for_job(res)
+        except (suds.WebFault, Exception):
+            msg = _('Failed to resize lun "%s"')
+            raise exception.VolumeBackendAPIException(data=msg % lun_id)
+
     def _create_qtree(self, host_id, vol_name, qtree_name):
         """Create a qtree the filer."""
         request = self.client.factory.create('Request')
@@ -929,6 +1000,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         project = snapshot['project_id']
         lun = self._lookup_lun_for_volume(vol_name, project)
         lun_id = lun.id
+        dataset = lun.dataset
         lun = self._get_lun_details(lun_id)
         extra_gb = snapshot['volume_size']
         new_size = '+%dg' % extra_gb
@@ -940,18 +1012,22 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         src_path = '%s/%s' % (qtree_path, lun_name)
         dest_path = '%s/%s' % (qtree_path, snapshot_name)
         self._clone_lun(lun.HostId, src_path, dest_path, True)
+        self._refresh_dfm_luns(lun.HostId)
+        self._discover_dataset_luns(dataset, snapshot_name)
 
     def delete_snapshot(self, snapshot):
         """Driver entry point for deleting a snapshot."""
         vol_name = snapshot['volume_name']
         snapshot_name = snapshot['name']
         project = snapshot['project_id']
-        lun = self._lookup_lun_for_volume(vol_name, project)
+        lun = self._lookup_lun_for_volume(snapshot_name, project)
         lun_id = lun.id
         lun = self._get_lun_details(lun_id)
         lun_path = '/vol/%s/%s/%s' % (lun.VolumeName, lun.QtreeName,
                                       snapshot_name)
-        self._destroy_lun(lun.HostId, lun_path)
+        lun_path2 = '/vol/' + str(lun.LunPath)
+        LOG.debug('delete_snapshot: lun_path=%s lun_path2=%s' % (lun_path, lun_path2))
+        self._destroy_lun(lun.HostId, lun_path2)
         extra_gb = snapshot['volume_size']
         new_size = '-%dg' % extra_gb
         self._resize_volume(lun.HostId, lun.VolumeName, new_size)
@@ -964,14 +1040,14 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         """
         vol_size = volume['size']
         snap_size = snapshot['volume_size']
-        if vol_size != snap_size:
+        if vol_size < snap_size:
             msg = _('Cannot create volume of size %(vol_size)s from '
                 'snapshot of size %(snap_size)s')
             raise exception.VolumeBackendAPIException(data=msg % locals())
         vol_name = snapshot['volume_name']
         snapshot_name = snapshot['name']
         project = snapshot['project_id']
-        lun = self._lookup_lun_for_volume(vol_name, project)
+        lun = self._lookup_lun_for_volume(snapshot_name, project)
         lun_id = lun.id
         dataset = lun.dataset
         old_type = dataset.type
@@ -983,15 +1059,21 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         lun = self._get_lun_details(lun_id)
         extra_gb = vol_size
         new_size = '+%dg' % extra_gb
-        self._resize_volume(lun.HostId, lun.VolumeName, new_size)
+        # see PCI-437
+        #self._resize_volume(lun.HostId, lun.VolumeName, new_size)
         clone_name = volume['name']
         self._create_qtree(lun.HostId, lun.VolumeName, clone_name)
         src_path = '/vol/%s/%s/%s' % (lun.VolumeName, lun.QtreeName,
                                       snapshot_name)
+        src_path2 = '/vol/' + str(lun.LunPath)
+        LOG.debug('create_volume_from_snapshot: src_path=%s src_path2=%s' % (src_path, src_path2))
         dest_path = '/vol/%s/%s/%s' % (lun.VolumeName, clone_name, clone_name)
-        self._clone_lun(lun.HostId, src_path, dest_path, False)
+        self._clone_lun(lun.HostId, src_path2, dest_path, False)
         self._refresh_dfm_luns(lun.HostId)
         self._discover_dataset_luns(dataset, clone_name)
+        if vol_size > snap_size:
+            new_lun = self._lookup_lun_for_volume(clone_name, project)
+            self._resize_lun(new_lun.id, vol_size)
 
     def check_for_export(self, context, volume_id):
         raise NotImplementedError()

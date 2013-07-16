@@ -370,8 +370,6 @@ class IptablesFirewallDriver(FirewallDriver):
                                                           security_group['id'])
 
             for rule in rules:
-                LOG.debug(_('Adding security group rule: %r'), rule,
-                          instance=instance)
 
                 if not rule.cidr:
                     version = 4
@@ -405,26 +403,16 @@ class IptablesFirewallDriver(FirewallDriver):
                     fw_rules += [' '.join(args)]
                 else:
                     if rule['grantee_group']:
-                        # FIXME(jkoelker) This needs to be ported up into
-                        #                 the compute manager which already
-                        #                 has access to a nw_api handle,
-                        #                 and should be the only one making
-                        #                 making rpc calls.
-                        nw_api = network.API()
                         for instance in rule['grantee_group']['instances']:
-                            nw_info = nw_api.get_instance_nw_info(ctxt,
-                                                                  instance)
+                            try:
+                                ips = [ip['address']
+                                    for ip in db.fixed_ip_get_by_instance(ctxt, instance['uuid'])]
+                            except:
+                                ips = []
 
-                            ips = [ip['address']
-                                for ip in nw_info.fixed_ips()
-                                    if ip['version'] == version]
-
-                            LOG.debug('ips: %r', ips, instance=instance)
                             for ip in ips:
                                 subrule = args + ['-s %s' % ip]
                                 fw_rules += [' '.join(subrule)]
-
-                LOG.debug('Using fw_rules: %r', fw_rules, instance=instance)
 
         ipv4_rules += ['-j $sg-fallback']
         ipv6_rules += ['-j $sg-fallback']
