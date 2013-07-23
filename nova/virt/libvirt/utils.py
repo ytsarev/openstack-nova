@@ -40,7 +40,10 @@ util_opts = [
     cfg.StrOpt('image_info_filename_pattern',
                default='$instances_path/$base_dir_name/%(image)s.info',
                help='Allows image information files to be stored in '
-                    'non-standard locations')
+                    'non-standard locations'),
+    cfg.FloatOpt('libvirt_thin_logical_volumes_overcommit',
+               default=1.5,
+               help='Maximum thin pool overcommit ratio.'),
     ]
 
 flags.DECLARE('instances_path', 'nova.compute.manager')
@@ -90,7 +93,7 @@ def create_cow_image(backing_file, path):
              'backing_file=%s' % backing_file, path)
 
 
-def create_lvm_image(vg, lv, size, sparse=False):
+def create_lvm_image(vg, lv, size, sparse=False, thin=False):
     """Create LVM image.
 
     Creates a LVM image with given size.
@@ -99,6 +102,7 @@ def create_lvm_image(vg, lv, size, sparse=False):
     :param lv: name for this image (logical volume)
     :size: size of image in bytes
     :sparse: create sparse logical volume
+    :thin: create thin logical volume
     """
     free_space = volume_group_free_space(vg)
 
@@ -121,10 +125,45 @@ def create_lvm_image(vg, lv, size, sparse=False):
 
         cmd = ('lvcreate', '-L', '%db' % preallocated_space,
                 '--virtualsize', '%db' % size, '-n', lv, vg)
+    elif thin:
+        # create thin pool if it doesn't exists
+        pool_name = "%s-pool" % vg
+        pool_path = '%s/%s' % (vg, pool_name)
+        if pool_name not in list_logical_volumes(vg):
+            # leave some spare space for troubleshooting
+            execute('lvcreate', '-T', '-l', '99%FREE', pool_path, run_as_root=True)
+
+        # check overcommit limit
+        allowed_overcommit = float(FLAGS.libvirt_thin_logical_volumes_overcommit)
+        pool_size = logical_volume_size(pool_path)
+        pool_allocated_size = thin_pool_allocated_size(pool_name)
+        overcommit = (float(size) + float(pool_allocated_size)) / float(pool_size)
+        if overcommit > allowed_overcommit:
+            LOG.error(_('The thin pool overcommit limit exceeded (%f > %f).') % (overcommit, allowed_overcommit))
+            raise RuntimeError(_('The thin pool overcommit limit exceeded (%f > %f).') % (overcommit, allowed_overcommit))
+
+        cmd = ('lvcreate', '--virtualsize', '%db' % size, '-n',
+               lv, '-T', pool_path)
     else:
         check_size(size)
         cmd = ('lvcreate', '-L', '%db' % size, '-n', lv, vg)
     execute(*cmd, run_as_root=True, attempts=3)
+
+
+def thin_pool_allocated_size(pool_name):
+    """Return allocated space in thin pool in bytes.
+
+    :param pool_name: thin pool name
+    """
+    allocated_size = 0
+    out, err = execute('lvs', '--units', 'b', '--option', 'pool_lv,lv_size',
+                       '--noheadings', '--nosuffix', '--separator', ',',
+                       run_as_root=True)
+    lv_list = [[ y[0].strip(), y[1]] for y in [ x.split(',') for x in out.splitlines() ]]
+    for lv in lv_list:
+        if lv[0] == pool_name:
+            allocated_size += int(lv[1])
+    return allocated_size
 
 
 def volume_group_free_space(vg):

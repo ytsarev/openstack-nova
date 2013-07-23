@@ -41,6 +41,10 @@ __imagebackend_opts = [
             default=False,
             help='Create sparse logical volumes (with virtualsize)'
                  ' if this flag is set to True.'),
+    cfg.BoolOpt('libvirt_thin_logical_volumes',
+            default=False,
+            help='Create thin provisioned logical volumes (with virtualsize)'
+                 ' if this flag is set to True.'),
         ]
 
 FLAGS = flags.FLAGS
@@ -192,6 +196,7 @@ class Lvm(Image):
                              self.escape(name))
         self.path = os.path.join('/dev', self.vg, self.lv)
         self.sparse = FLAGS.libvirt_sparse_logical_volumes
+        self.thin = FLAGS.libvirt_thin_logical_volumes
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         @utils.synchronized(base, external=True, lock_path=self.lock_path)
@@ -200,7 +205,8 @@ class Lvm(Image):
             resize = size > base_size
             size = size if resize else base_size
             libvirt_utils.create_lvm_image(self.vg, self.lv,
-                                           size, sparse=self.sparse)
+                                           size, sparse=self.sparse,
+                                           thin=self.thin)
             cmd = ('dd', 'if=%s' % base, 'of=%s' % self.path, 'bs=4M')
             utils.execute(*cmd, run_as_root=True)
             if resize:
@@ -211,7 +217,8 @@ class Lvm(Image):
         #Generate images with specified size right on volume
         if generated and size:
             libvirt_utils.create_lvm_image(self.vg, self.lv,
-                                           size, sparse=self.sparse)
+                                           size, sparse=self.sparse,
+                                           thin=self.thin)
             with self.remove_volume_on_error(self.path):
                 prepare_template(target=self.path, *args, **kwargs)
 
