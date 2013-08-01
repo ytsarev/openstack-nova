@@ -38,6 +38,8 @@ from socket import gethostbyname
 
 from nova.api.ec2 import ec2utils
 
+from nova.virt.libvirt.utils import logical_volume_size
+
 LOG = logging.getLogger(__name__)
 
 volume_opts = [
@@ -79,6 +81,13 @@ volume_opts = [
                default=None,
                help='where to store temporary image files if the volume '
                     'driver does not write them directly to the volume'),
+    cfg.BoolOpt('libvirt_thin_logical_volumes',
+                default=False,
+                help='Create thin provisioned logical volumes (with virtualsize)'
+                     ' if this flag is set to True.'),
+    cfg.FloatOpt('libvirt_thin_logical_volumes_overcommit',
+                 default=1.5,
+                 help='Maximum thin pool overcommit ratio.'),
     ]
 
 FLAGS = flags.FLAGS
@@ -123,8 +132,28 @@ class VolumeDriver(object):
             raise exception.VolumeBackendAPIException(data=exception_message)
 
     def _create_volume(self, volume_name, sizestr):
-        self._try_execute('lvcreate', '-L', sizestr, '-n',
-                          volume_name, FLAGS.volume_group, run_as_root=True)
+        if FLAGS.libvirt_thin_logical_volumes:
+            # check if the thin pool exists
+            pool_name = "%s-pool" % FLAGS.volume_group
+            pool_path = '%s/%s' % (FLAGS.volume_group, pool_name)
+            if self._volume_not_present(pool_name):
+                # create the thin pool
+                utils.create_thin_pool(pool_path)
+            # check overcommit limit
+            size = utils.human2bytes(sizestr)
+            allowed_overcommit = float(FLAGS.libvirt_thin_logical_volumes_overcommit)
+            pool_size = logical_volume_size(pool_path)
+            pool_allocated_size = utils.thin_pool_allocated_size(pool_name)
+            overcommit = (float(size) + float(pool_allocated_size)) / float(pool_size)
+            if overcommit > allowed_overcommit:
+                exception_message = (_('The thin pool overcommit limit exceeded (%f > %f).') % (overcommit, allowed_overcommit))
+                raise exception.VolumeBackendAPIException(data=exception_message)
+            # create volume within the thinpool
+            self._try_execute('lvcreate', '--virtualsize', sizestr, '-n',
+                              volume_name, '-T', pool_path, run_as_root=True)
+        else:
+            self._try_execute('lvcreate', '-L', sizestr, '-n',
+                              volume_name, FLAGS.volume_group, run_as_root=True)
 
     def _copy_volume(self, srcstr, deststr, size_in_g):
         # Use O_DIRECT to avoid thrashing the system buffer cache
