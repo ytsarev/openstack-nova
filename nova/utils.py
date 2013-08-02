@@ -1411,3 +1411,47 @@ def last_bytes(file_like_object, num):
 
     remaining = file_like_object.tell()
     return (file_like_object.read(), remaining)
+
+
+def human2bytes(s):
+    """ Attempts to guess the string format based on default symbols
+    set and return the corresponding bytes as an integer.
+
+    :param s: size in human readable format ('1M', '1G', ...)
+
+    :returns: bytes
+    """
+    symbols = ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y')
+    letter = s[-1:].strip().upper()
+    num = s[:-1]
+    assert num.isdigit() and letter in symbols
+    num = float(num)
+    prefix = {symbols[0]:1}
+    for i, s in enumerate(symbols[1:]):
+        prefix[s] = 1 << (i + 1) * 10
+    return int(num * prefix[letter])
+
+
+def create_thin_pool(pool_path):
+    """Create the LVM thin pool.
+
+    :param pool_path: thin pool path, for example "nova-volumes/nova-volumes-pool"
+    """
+    # leave some spare space for troubleshooting
+    execute('lvcreate', '-T', '-l', '99%FREE', pool_path, run_as_root=True)
+
+
+def thin_pool_allocated_size(pool_name):
+    """Return allocated space in thin pool in bytes.
+
+    :param pool_name: thin pool name
+    """
+    allocated_size = 0
+    out, err = execute('lvs', '--units', 'b', '--option', 'pool_lv,lv_size',
+                       '--noheadings', '--nosuffix', '--separator', ',',
+                       run_as_root=True)
+    lv_list = [[ y[0].strip(), y[1]] for y in [ x.split(',') for x in out.splitlines() ]]
+    for lv in lv_list:
+        if lv[0] == pool_name:
+            allocated_size += int(lv[1])
+    return allocated_size

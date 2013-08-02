@@ -175,12 +175,19 @@ class TgtAdm(TargetAdmin):
         LOG.debug('%s path = %s' % (logmsg, volume_path))
         LOG.debug('%s uuid file = %s' % (logmsg,vol_uuid_file))
 
+        iqn = '%s%s' % (FLAGS.iscsi_target_prefix,
+                        vol_uuid_file)
         if os.path.isfile(volume_path):
-            iqn = '%s%s' % (FLAGS.iscsi_target_prefix,
-                            vol_uuid_file)
             LOG.debug('%s iqn = %s' % (logmsg, iqn))
         else:
-            raise exception.ISCSITargetRemoveFailed(volume_id=vol_id)
+            LOG.debug('%s path %s does not exist' % (logmsg, volume_path))
+            if self._get_target(iqn):
+                # iSCSI target exists, but volume path doesn't
+                raise exception.ISCSITargetRemoveFailed(volume_id=vol_id)
+            else:
+                # deleting of iSCSI target not needed
+                LOG.debug('%s %s does not exist' % (logmsg, iqn))
+                return
         try:
             self._execute('tgt-admin',
                           '--delete',
