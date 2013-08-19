@@ -186,7 +186,7 @@ class VolumeDriver(object):
         # TODO(ja): reclaiming space should be done lazy and low priority
 
         dev_path = self.local_path(volume, ec2id)
-        self._copy_volume('/dev/zero', dev_path, size_in_g)
+        self._copy_volume('/dev/zero', dev_path, 1)
 
         if os.path.exists(dev_path):
             self._try_execute('dmsetup', 'remove', '-f', dev_path,
