@@ -1978,7 +1978,14 @@ class LibvirtDriver(driver.ComputeDriver):
         self.plug_vifs(instance, network_info)
         self.firewall_driver.setup_basic_filtering(instance, network_info)
         self.firewall_driver.prepare_instance_filter(instance, network_info)
-        domain = self._create_domain(xml)
+        try:
+            domain = self._create_domain(xml)
+        except Exception, e:
+            try:
+                raise
+            finally:
+                self.destroy(instance, network_info, block_device_info)
+
         self.firewall_driver.apply_instance_filter(instance, network_info)
         return domain
 
