@@ -1235,6 +1235,23 @@ def fixed_ip_get_by_instance(context, instance_uuid):
 
 
 @require_context
+def fixed_ip_get_by_instances(context, instance_uuids):
+    list = []
+    for instance_uuid in instance_uuids:
+        if utils.is_uuid_like(instance_uuid):
+            list.append("instance_uuid='%s'" % instance_uuid)
+        else:
+            raise exception.InvalidUUID(uuid=instance_uuid)
+
+    results = []
+    results = model_query(context, models.FixedIp, read_deleted="no").\
+                  filter(or_(*list)).\
+                  all()
+
+    return results
+
+
+@require_context
 def fixed_ip_get_by_network_host(context, network_id, host):
     result = model_query(context, models.FixedIp, read_deleted="no").\
                  filter_by(network_id=network_id).\

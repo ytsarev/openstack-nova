@@ -488,6 +488,11 @@ def fixed_ip_get_by_instance(context, instance_uuid):
     return IMPL.fixed_ip_get_by_instance(context, instance_uuid)
 
 
+def fixed_ip_get_by_instances(context, instance_uuids):
+    """Get fixed ips by instance or raise if none exist."""
+    return IMPL.fixed_ip_get_by_instances(context, instance_uuids)
+
+
 def fixed_ip_get_by_network_host(context, network_uuid, host):
     """Get fixed ip for a host in a network."""
     return IMPL.fixed_ip_get_by_network_host(context, network_uuid, host)
