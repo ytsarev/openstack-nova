@@ -192,6 +192,10 @@ libvirt_opts = [
                default='$instances_path/snapshots',
                help='Location where libvirt driver will store snapshots '
                     'before uploading them to image service'),
+    cfg.BoolOpt('libvirt_thin_logical_volumes',
+            default=False,
+            help='Create thin provisioned logical volumes (with virtualsize)'
+                 ' if this flag is set to True.'),
     ]
 
 FLAGS = flags.FLAGS
@@ -2098,7 +2102,12 @@ class LibvirtDriver(driver.ComputeDriver):
             stats = libvirt_utils.get_fs_info(FLAGS.instances_path)
             return stats['total'] / (1024 ** 3)
         else:
-            out = libvirt_utils.volume_group_total_space(FLAGS.libvirt_images_volume_group)
+            if FLAGS.libvirt_thin_logical_volumes == True:
+                pool_name = "%s-pool" % FLAGS.libvirt_images_volume_group
+                pool_path = '%s/%s' % (FLAGS.libvirt_images_volume_group, pool_name)
+                out = libvirt_utils.logical_volume_size(pool_path)
+            else:
+                out = libvirt_utils.volume_group_total_space(FLAGS.libvirt_images_volume_group)
             return int(out / 1024 ** 3)
 
     def get_vcpu_used(self):
@@ -2181,7 +2190,11 @@ class LibvirtDriver(driver.ComputeDriver):
             stats = libvirt_utils.get_fs_info(FLAGS.instances_path)
             return stats['used'] / (1024 ** 3)
         else:
-            out = libvirt_utils.volume_group_total_space(FLAGS.libvirt_images_volume_group) - libvirt_utils.volume_group_free_space(FLAGS.libvirt_images_volume_group)
+            if FLAGS.libvirt_thin_logical_volumes == True:
+                pool_name = "%s-pool" % FLAGS.libvirt_images_volume_group
+                out = utils.thin_pool_allocated_size(pool_name)
+            else:
+                out = libvirt_utils.volume_group_total_space(FLAGS.libvirt_images_volume_group) - libvirt_utils.volume_group_free_space(FLAGS.libvirt_images_volume_group)
             return int(out / 1024 ** 3)
 
     def get_hypervisor_type(self):

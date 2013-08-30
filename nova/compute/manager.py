@@ -139,6 +139,13 @@ compute_opts = [
     cfg.BoolOpt('instance_usage_audit',
                default=False,
                help="Generate periodic compute.instance.exists notifications"),
+    cfg.BoolOpt('libvirt_thin_logical_volumes',
+            default=False,
+            help='Create thin provisioned logical volumes (with virtualsize)'
+                 ' if this flag is set to True.'),
+    cfg.FloatOpt('libvirt_thin_logical_volumes_overcommit',
+               default=1.5,
+               help='Maximum thin pool overcommit ratio.'),
     ]
 
 FLAGS = flags.FLAGS
@@ -2672,6 +2679,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             # to be sent to the Schedulers.
             capabilities = self.driver.get_host_stats(refresh=True)
             capabilities['host_ip'] = FLAGS.my_ip
+            capabilities['thin_logical_volumes'] = FLAGS.libvirt_thin_logical_volumes
+            capabilities['thin_logical_volumes_overcommit'] = FLAGS.libvirt_thin_logical_volumes_overcommit
             self.update_service_capabilities(capabilities)
 
     @manager.periodic_task(ticks_between_runs=10)
