@@ -39,7 +39,10 @@ class DiskFilter(filters.BaseHostFilter):
         free_disk_mb = host_state.free_disk_mb
         total_usable_disk_mb = host_state.total_usable_disk_gb * 1024
 
-        disk_mb_limit = total_usable_disk_mb * FLAGS.disk_allocation_ratio
+        if host_state.thin_logical_volumes and host_state.thin_logical_volumes_overcommit:
+            disk_mb_limit = total_usable_disk_mb * host_state.thin_logical_volumes_overcommit
+        else:
+            disk_mb_limit = total_usable_disk_mb * FLAGS.disk_allocation_ratio
         used_disk_mb = total_usable_disk_mb - free_disk_mb
         usable_disk_mb = disk_mb_limit - used_disk_mb
 

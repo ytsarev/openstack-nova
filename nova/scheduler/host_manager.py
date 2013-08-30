@@ -117,6 +117,9 @@ class HostState(object):
             capabilities = {}
         self.capabilities = ReadOnlyDict(capabilities.get(topic, None))
         self.memory_free = self.capabilities.get('host_memory_free', None)
+        # thin LVM support
+        self.thin_logical_volumes = self.capabilities.get('thin_logical_volumes', None)
+        self.thin_logical_volumes_overcommit = self.capabilities.get('thin_logical_volumes_overcommit', None)
         if service is None:
             service = {}
         self.service = ReadOnlyDict(service)
