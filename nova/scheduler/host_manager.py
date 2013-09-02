@@ -94,6 +94,10 @@ class HostState(object):
     def __init__(self, host, topic, capabilities=None, service=None):
         self.host = host
         self.topic = topic
+        # RAM/CPU overcommit ratio per comupte node
+        self.ram_compute_ratio = 1.0
+        self.cpu_compute_ratio = 1.0
+
         self.update_capabilities(topic, capabilities, service)
 
         # Mutable available resources.
@@ -117,6 +121,8 @@ class HostState(object):
             capabilities = {}
         self.capabilities = ReadOnlyDict(capabilities.get(topic, None))
         self.memory_free = self.capabilities.get('host_memory_free', None)
+        self.ram_compute_ratio = self.capabilities.get('ram_compute_ratio', None)
+        self.cpu_compute_ratio = self.capabilities.get('cpu_compute_ratio', None)
         # thin LVM support
         self.thin_logical_volumes = self.capabilities.get('thin_logical_volumes', None)
         self.thin_logical_volumes_overcommit = self.capabilities.get('thin_logical_volumes_overcommit', None)
@@ -184,8 +190,8 @@ class HostState(object):
         return True
 
     def __repr__(self):
-        return ("host '%s': free_ram_mb:%s free_disk_mb:%s memory_free:%s" %
-                (self.host, self.free_ram_mb, self.free_disk_mb, self.memory_free))
+        return ("host '%s': free_ram_mb:%s free_disk_mb:%s memory_free:%s cpu_compute_ratio:%s ram_compute_ratio:%s" %
+                (self.host, self.free_ram_mb, self.free_disk_mb, self.memory_free, self.cpu_compute_ratio, self.ram_compute_ratio))
 
 class HostManager(object):
     """Base HostManager class."""

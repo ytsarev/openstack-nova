@@ -38,8 +38,17 @@ class RamFilter(filters.BaseHostFilter):
         requested_ram = instance_type['memory_mb']
         free_ram_mb = host_state.free_ram_mb
         total_usable_ram_mb = host_state.total_usable_ram_mb
+        try:
+            if host_state.ram_compute_ratio is not None:
+                ram_allocation_ratio = host_state.ram_compute_ratio
+            else:
+                ram_allocation_ratio = FLAGS.ram_allocation_ratio
+        except:
+            ram_allocation_ratio = FLAGS.ram_allocation_ratio
 
-        memory_mb_limit = total_usable_ram_mb * FLAGS.ram_allocation_ratio
+        LOG.debug(_("RAM allocation ratio was set to %f") % ram_allocation_ratio)
+
+        memory_mb_limit = total_usable_ram_mb * ram_allocation_ratio
         used_ram_mb = total_usable_ram_mb - free_ram_mb
         usable_ram = memory_mb_limit - used_ram_mb
         if not usable_ram >= requested_ram:

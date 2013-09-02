@@ -46,7 +46,18 @@ class CoreFilter(filters.BaseHostFilter):
             return True
 
         instance_vcpus = instance_type['vcpus']
-        vcpus_total = host_state.vcpus_total * FLAGS.cpu_allocation_ratio
+
+        try:
+            if host_state.cpu_compute_ratio is not None:
+                cpu_allocation_ratio = host_state.cpu_compute_ratio
+            else:
+                cpu_allocation_ratio = FLAGS.cpu_allocation_ratio
+        except:
+            cpu_allocation_ratio = FLAGS.cpu_allocation_ratio
+
+        LOG.debug(_("CPU allocation ratio was set to %f") % cpu_allocation_ratio)
+
+        vcpus_total = host_state.vcpus_total * cpu_allocation_ratio
 
         # Only provide a VCPU limit to compute if the virt driver is reporting
         # an accurate count of installed VCPUs. (XenServer driver does not)
