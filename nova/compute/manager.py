@@ -146,6 +146,12 @@ compute_opts = [
     cfg.FloatOpt('libvirt_thin_logical_volumes_overcommit',
                default=1.5,
                help='Maximum thin pool overcommit ratio.'),
+    cfg.FloatOpt('cpu_compute_ratio',
+                 default=16,
+                 help='Virtual CPU to Physical CPU allocation ratio'),
+    cfg.FloatOpt('ram_compute_ratio',
+                 default=1.5,
+                 help='Virtual ram to physical ram allocation ratio'),
     ]
 
 FLAGS = flags.FLAGS
@@ -2681,6 +2687,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             capabilities['host_ip'] = FLAGS.my_ip
             capabilities['thin_logical_volumes'] = FLAGS.libvirt_thin_logical_volumes
             capabilities['thin_logical_volumes_overcommit'] = FLAGS.libvirt_thin_logical_volumes_overcommit
+            capabilities['ram_compute_ratio'] = FLAGS.ram_compute_ratio
+            capabilities['cpu_compute_ratio'] = FLAGS.cpu_compute_ratio
             self.update_service_capabilities(capabilities)
 
     @manager.periodic_task(ticks_between_runs=10)
