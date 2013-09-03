@@ -401,7 +401,7 @@ class IptablesFirewallDriver(FirewallDriver):
                     LOG.debug('Using cidr %r', rule.cidr, instance=instance)
                     args += ['-s', rule.cidr]
                     fw_rules += [' '.join(args)]
-                else:
+                elif not FLAGS.allow_same_net_traffic:
                     if rule['grantee_group']:
                         for instance in rule['grantee_group']['instances']:
                             try:
