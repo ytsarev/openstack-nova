@@ -1123,10 +1123,12 @@ class CloudController(object):
             i['dnsName'] = i['publicDnsName'] or i['privateDnsName']
             i['keyName'] = instance['key_name']
 
-            if context.is_admin:
+            # PCI-2238: this used to be for admin contexts only.
+            if context.is_admin or "poweruser" in context.roles:
                 i['keyName'] = '%s (%s, %s)' % (i['keyName'],
                     instance['project_id'],
                     instance['host'])
+
             i['productCodesSet'] = utils.convert_to_list_dict([],
                                                               'product_codes')
             self._format_instance_type(instance, i)
