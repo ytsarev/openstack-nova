@@ -864,7 +864,6 @@ def restart_dhcp(context, dev, network_ref):
     cmd = ['FLAGFILE=%s' % FLAGS.dhcpbridge_flagfile,
            'NETWORK_ID=%s' % str(network_ref['id']),
            'dnsmasq',
-           '--strict-order',
            '--bind-interfaces',
            '--conf-file=%s' % FLAGS.dnsmasq_config_file,
            '--domain=%s' % FLAGS.dhcp_domain,
