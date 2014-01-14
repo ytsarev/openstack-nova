@@ -344,7 +344,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                         self._set_instance_error_state(context,
                                                        instance['uuid'])
 
-                elif drv_state == power_state.RUNNING:
+                elif drv_state in (power_state.RUNNING, power_state.SHUTDOWN):
                     # VMWareAPI drivers will raise an exception
                     try:
                         self.driver.ensure_filtering_rules_for_instance(
