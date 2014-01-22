@@ -793,11 +793,9 @@ def floating_ip_create(context, values, session=None):
 @require_context
 def floating_ip_count_by_project(context, project_id, session=None):
     authorize_project_context(context, project_id)
-    # TODO(tr3buchet): why leave auto_assigned floating IPs out?
     return model_query(context, models.FloatingIp, read_deleted="no",
                        session=session).\
                    filter_by(project_id=project_id).\
-                   filter_by(auto_assigned=False).\
                    count()
 
 
@@ -905,10 +903,8 @@ def floating_ip_get_all_by_host(context, host):
 @require_context
 def floating_ip_get_all_by_project(context, project_id):
     authorize_project_context(context, project_id)
-    # TODO(tr3buchet): why do we not want auto_assigned floating IPs here?
     return _floating_ip_get_all(context).\
                          filter_by(project_id=project_id).\
-                         filter_by(auto_assigned=False).\
                          all()
 
 
