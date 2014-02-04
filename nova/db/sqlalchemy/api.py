@@ -900,12 +900,26 @@ def floating_ip_get_all_by_host(context, host):
     return floating_ip_refs
 
 
+# tweaked by TDU - PCI-3231
+# include fixed IP and instance UUID directly in this response
+# (and do some fugly hacking to workaround broken model)
 @require_context
 def floating_ip_get_all_by_project(context, project_id):
     authorize_project_context(context, project_id)
-    return _floating_ip_get_all(context).\
-                         filter_by(project_id=project_id).\
-                         all()
+    fl_ip_list = _floating_ip_get_all(context).\
+                    filter_by(project_id=project_id).\
+                    join(models.FixedIp, models.FixedIp.id==models.FloatingIp.fixed_ip_id).\
+                    add_column(models.FixedIp.instance_uuid.label("floating_ips_instance_uuid")).\
+                    add_column(models.FixedIp.address.label("floating_ips_fixed_ip")).\
+                    all()
+
+    ret = []
+    for fl_ip in fl_ip_list:
+        tmp = fl_ip[0]
+        tmp['fixed_ip'] = { 'address': fl_ip[2], 'instance_uuid': fl_ip[1] }
+        ret.append(tmp)
+
+    return ret
 
 
 @require_context

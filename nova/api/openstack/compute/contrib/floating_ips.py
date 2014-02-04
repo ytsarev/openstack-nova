@@ -154,6 +154,9 @@ class FloatingIPController(object):
 
         return _translate_floating_ip_view(floating_ip)
 
+    # tweaked by TDU - PCI-3231
+    # I'm not particularly proud of this one, but it gets the job done
+    # in reasonable time and without hundreds separate SQL queries..
     @wsgi.serializers(xml=FloatingIPsTemplate)
     def index(self, req):
         """Return a list of floating ips allocated to a project."""
@@ -162,7 +165,15 @@ class FloatingIPController(object):
 
         floating_ips = self.network_api.get_floating_ips_by_project(context)
 
+        search_opts = {}
+        search_opts['project_id'] = context.project_id
+        all_instances = self.compute_api.get_all(context, search_opts)
+
         for floating_ip in floating_ips:
+            for instance in all_instances:
+                if instance['uuid'] == floating_ip['fixed_ip']['instance_uuid']:
+                    floating_ip['instance'] = instance
+                    break
             self._set_metadata(context, floating_ip)
 
         return _translate_floating_ips_view(floating_ips)
