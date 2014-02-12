@@ -408,7 +408,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         Synchronise the call beacuse we may still be in the middle of
         creating the instance.
         """
-        @lockutils.synchronized(instance['uuid'], 'nova-')
+        @utils.synchronized(instance['uuid'])
         def _sync_refresh():
             return self.driver.refresh_instance_security_rules(instance)
         return _sync_refresh()
