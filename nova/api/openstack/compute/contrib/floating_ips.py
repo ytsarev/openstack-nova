@@ -167,6 +167,7 @@ class FloatingIPController(object):
 
         search_opts = {}
         search_opts['project_id'] = context.project_id
+        search_opts['deleted'] = False
         all_instances = self.compute_api.get_all(context, search_opts)
 
         for floating_ip in floating_ips:
