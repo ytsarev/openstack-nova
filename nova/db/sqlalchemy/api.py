@@ -908,7 +908,7 @@ def floating_ip_get_all_by_project(context, project_id):
     authorize_project_context(context, project_id)
     fl_ip_list = _floating_ip_get_all(context).\
                     filter_by(project_id=project_id).\
-                    join(models.FixedIp, models.FixedIp.id==models.FloatingIp.fixed_ip_id).\
+                    outerjoin(models.FixedIp, models.FixedIp.id==models.FloatingIp.fixed_ip_id).\
                     add_column(models.FixedIp.instance_uuid.label("floating_ips_instance_uuid")).\
                     add_column(models.FixedIp.address.label("floating_ips_fixed_ip")).\
                     all()
