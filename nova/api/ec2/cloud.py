@@ -941,7 +941,10 @@ class CloudController(object):
             _unsupported_attribute(instance, result)
 
         def _format_attr_user_data(instance, result):
-            result['userData'] = {'value': base64.b64decode(instance['user_data'])}
+            if instance['user_data'] is not None:
+               result['userData'] = {'value': base64.b64decode(instance['user_data'])}
+            else:
+               result['userData'] = {'value': ''}
 
         attribute_formatter = {
             'blockDeviceMapping': _format_attr_block_device_mapping,
