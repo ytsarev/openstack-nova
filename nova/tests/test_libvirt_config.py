@@ -21,6 +21,10 @@ from nova import test
 
 from nova.virt.libvirt import config
 
+from nova import flags
+
+FLAGS = flags.FLAGS
+
 
 class LibvirtConfigBaseTest(test.TestCase):
     def assertXmlEqual(self, expectedXmlstr, actualXmlstr):
@@ -395,6 +399,94 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
               <target bus="virtio" dev="/dev/vda"/>
             </disk>""")
 
+    def test_io_native(self):
+        FLAGS.libvirt_io_native = True
+        FLAGS.libvirt_dataplane = False
+        FLAGS.libvirt_images_type = "lvm"
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "block"
+        obj.source_device = "disk"
+        obj.source_path = "/dev/nova-volumes/test-io-native"
+        obj.target_dev = "/dev/vda"
+        obj.target_bus = "virtio"
+        obj.driver_name = "qemu"
+        obj.driver_format = "raw"
+        obj.driver_cache = "none"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="block" device="disk">
+              <driver name='qemu' type='raw' cache='none' io='native'/>
+              <source dev="/dev/nova-volumes/test-io-native"/>
+              <target bus="virtio" dev="/dev/vda"/>
+            </disk>""")
+
+    def test_io_native_through_dataplane(self):
+        FLAGS.libvirt_io_native = False
+        FLAGS.libvirt_dataplane = True
+        FLAGS.libvirt_images_type = "lvm"
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "block"
+        obj.source_device = "disk"
+        obj.source_path = "/dev/nova-volumes/test-io-native"
+        obj.target_dev = "/dev/vda"
+        obj.target_bus = "virtio"
+        obj.driver_name = "qemu"
+        obj.driver_format = "raw"
+        obj.driver_cache = "none"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="block" device="disk">
+              <driver name='qemu' type='raw' cache='none' io='native'/>
+              <source dev="/dev/nova-volumes/test-io-native"/>
+              <target bus="virtio" dev="/dev/vda"/>
+            </disk>""")
+
+    def test_io_native_disabled(self):
+        FLAGS.libvirt_io_native = False
+        FLAGS.libvirt_dataplane = False
+        FLAGS.libvirt_images_type = "lvm"
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "block"
+        obj.source_device = "disk"
+        obj.source_path = "/dev/nova-volumes/test-io-native"
+        obj.target_dev = "/dev/vda"
+        obj.target_bus = "virtio"
+        obj.driver_name = "qemu"
+        obj.driver_format = "raw"
+        obj.driver_cache = "none"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="block" device="disk">
+              <driver name='qemu' type='raw' cache='none'/>
+              <source dev="/dev/nova-volumes/test-io-native"/>
+              <target bus="virtio" dev="/dev/vda"/>
+            </disk>""")
+
+    def test_io_native_disabled_no_lvm(self):
+        FLAGS.libvirt_io_native = True
+        FLAGS.libvirt_dataplane = False
+        FLAGS.libvirt_images_type = "raw"
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "block"
+        obj.source_device = "disk"
+        obj.source_path = "/dev/nova-volumes/test-io-native"
+        obj.target_dev = "/dev/vda"
+        obj.target_bus = "virtio"
+        obj.driver_name = "qemu"
+        obj.driver_format = "raw"
+        obj.driver_cache = "none"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="block" device="disk">
+              <driver name='qemu' type='raw' cache='none'/>
+              <source dev="/dev/nova-volumes/test-io-native"/>
+              <target bus="virtio" dev="/dev/vda"/>
+            </disk>""")
+
 
 class LibvirtConfigGuestFilesysTest(LibvirtConfigBaseTest):
 
@@ -707,6 +799,64 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
                   <target bus="virtio" dev="/dev/vda"/>
                 </disk>
               </devices>
+            </domain>""")
+
+    def test_config_kvm_dataplane(self):
+        FLAGS.libvirt_dataplane = True
+        FLAGS.libvirt_images_type = "lvm"
+        obj = config.LibvirtConfigGuest()
+        obj.virt_type = "kvm"
+        obj.memory = 1024 * 1024 * 100
+        obj.vcpus = 2
+        obj.name = "demo"
+        obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
+        obj.os_type = "linux"
+        obj.os_boot_dev = "hd"
+        obj.acpi = True
+        obj.apic = True
+        obj.pae = True
+        obj.dataplane = True
+
+        disk = config.LibvirtConfigGuestDisk()
+        disk.source_type = "block"
+        disk.source_path = "/dev/nova-volumes/test-dataplane"
+        disk.target_dev = "/dev/vda"
+        disk.target_bus = "virtio"
+        disk.driver_name = "qemu"
+        disk.driver_format = "raw"
+        disk.driver_cache = "none"
+
+        obj.add_device(disk)
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <domain type="kvm">
+              <uuid>b38a3f43-4be2-4046-897f-b67c2f5e0147</uuid>
+              <name>demo</name>
+              <memory>104857600</memory>
+              <vcpu>2</vcpu>
+              <os>
+                <type>linux</type>
+                <boot dev="hd"/>
+              </os>
+              <features>
+                <acpi/>
+                <apic/>
+                <pae/>
+              </features>
+              <devices>
+                <disk type="block" device="disk">
+                  <driver name='qemu' type='raw' cache='none' io='native'/>
+                  <source dev="/dev/nova-volumes/test-dataplane"/>
+                  <target bus="virtio" dev="/dev/vda"/>
+                </disk>
+              </devices>
+            <qemu:commandline xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0">
+               <qemu:arg value="-global"/>
+               <qemu:arg value="virtio-blk-pci.scsi=off"/>
+               <qemu:arg value="-global"/>
+               <qemu:arg value="virtio-blk-pci.x-data-plane=on"/>
+            </qemu:commandline>
             </domain>""")
 
 

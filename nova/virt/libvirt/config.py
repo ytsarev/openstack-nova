@@ -23,12 +23,14 @@ and support conversion to/from XML
 
 from nova import exception
 from nova.openstack.common import log as logging
+from nova import flags
 
 from lxml import etree
 
 
 LOG = logging.getLogger(__name__)
 
+FLAGS = flags.FLAGS
 
 class LibvirtConfigObject(object):
 
@@ -354,6 +356,14 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
         self.driver_name = None
         self.driver_format = None
         self.driver_cache = None
+        if (FLAGS.libvirt_dataplane or FLAGS.libvirt_io_native):
+            if FLAGS.libvirt_images_type == "lvm":
+                self.driver_io = "native"
+            else:
+                self.driver_io = None
+                LOG.warn('Native io can be enabled only for lvm image type')
+        else:
+            self.driver_io = None
         self.source_path = None
         self.source_protocol = None
         self.source_host = None
@@ -380,6 +390,8 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
                 drv.set("type", self.driver_format)
             if self.driver_cache is not None:
                 drv.set("cache", self.driver_cache)
+            if self.driver_io is not None:
+                drv.set("io", self.driver_io)
             dev.append(drv)
 
         if self.source_type == "file":
@@ -585,6 +597,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
         self.vcpus = 1
         self.cpu = None
         self.hugepages = False
+        self.dataplane = False
         self.acpi = False
         self.apic = False
         self.pae = False
@@ -630,6 +643,19 @@ class LibvirtConfigGuest(LibvirtConfigObject):
             memorybacking.append(etree.Element("hugepages"))
             root.append(memorybacking)
 
+    def _format_dataplane(self, root):
+        if self.dataplane:
+            XML_NAMESPACE = "http://libvirt.org/schemas/domain/qemu/1.0"
+            XML = "{%s}" % XML_NAMESPACE
+            NSMAP = {"qemu": XML_NAMESPACE}
+            qemu_cl = etree.Element(XML + "commandline", nsmap=NSMAP)
+            qemu_opts = ["-global", "virtio-blk-pci.scsi=off",
+                         "-global", "virtio-blk-pci.x-data-plane=on"]
+            for option in qemu_opts:
+                qemu_arg = etree.SubElement(qemu_cl, XML + "arg")
+                qemu_arg.set("value", option)
+            root.append(qemu_cl)
+
     def _format_features(self, root):
         if self.acpi or self.apic or self.pae:
             features = etree.Element("features")
@@ -666,6 +692,8 @@ class LibvirtConfigGuest(LibvirtConfigObject):
             root.append(self.cpu.format_dom())
 
         self._format_devices(root)
+
+        self._format_dataplane(root)
 
         return root
 
