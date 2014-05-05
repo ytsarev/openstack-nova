@@ -103,6 +103,12 @@ libvirt_opts = [
     cfg.StrOpt('libvirt_hugepages',
                default=False,
                help='Libvirt hugepages memory backed'),
+    cfg.BoolOpt('libvirt_dataplane',
+                default=False,
+                help='Enable x-data-plane for virtio devices'),
+    cfg.BoolOpt('libvirt_io_native',
+                default=False,
+                help='Enable native io'),
     cfg.StrOpt('libvirt_uri',
                default='',
                help='Override the default libvirt URI '
@@ -1839,6 +1845,9 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if FLAGS.libvirt_hugepages == True:
             guest.hugepages = True
+
+        if FLAGS.libvirt_dataplane:
+            guest.dataplane = True
 
         clk = config.LibvirtConfigGuestClock()
         clk.offset = "utc"
