@@ -25,6 +25,7 @@ datastore.
 import base64
 import time
 import functools
+import datetime
 
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
@@ -1072,6 +1073,11 @@ class CloudController(object):
         #               rather than simply formatting a bunch of instances that
         #               were handed to it
         reservations = {}
+
+        # always filter out older instances
+        ts = timeutils.utcnow() - datetime.timedelta(minutes=60)
+        search_opts['terminated-since'] = ts
+
         # NOTE(vish): instance_id is an optional list of ids to filter by
         if instance_id:
             instances = []
@@ -1079,14 +1085,19 @@ class CloudController(object):
                 try:
                     instance_uuid = ec2utils.ec2_inst_id_to_uuid(context,
                                                                  ec2_id)
-                    instance = self.compute_api.get(context, instance_uuid)
+                    search_opts['instance-uuid'] = instance_uuid
+                    instance = self.compute_api.get_all(context,
+                                                        search_opts=search_opts,
+                                                        sort_dir='asc')
                 except exception.NotFound:
                     continue
-                instances.append(instance)
+
+                try:
+                    instances.append(instance[0])
+                except:
+                    continue
         else:
             try:
-                # always filter out deleted instances
-                search_opts['deleted'] = False
                 instances = self.compute_api.get_all(context,
                                                      search_opts=search_opts,
                                                      sort_dir='asc')
@@ -1109,13 +1120,14 @@ class CloudController(object):
 
             fixed_ip = None
             floating_ip = None
-            ip_info = ec2utils.get_ip_info_for_instance(context, instance)
-            if ip_info['fixed_ips']:
-                fixed_ip = ip_info['fixed_ips'][0]
-            if ip_info['floating_ips']:
-                floating_ip = ip_info['floating_ips'][0]
-            if ip_info['fixed_ip6s']:
-                i['dnsNameV6'] = ip_info['fixed_ip6s'][0]
+            if instance['deleted'] != True:
+                ip_info = ec2utils.get_ip_info_for_instance(context, instance)
+                if ip_info['fixed_ips']:
+                    fixed_ip = ip_info['fixed_ips'][0]
+                if ip_info['floating_ips']:
+                    floating_ip = ip_info['floating_ips'][0]
+                if ip_info['fixed_ip6s']:
+                    i['dnsNameV6'] = ip_info['fixed_ip6s'][0]
             if FLAGS.ec2_private_dns_show_ip:
                 i['privateDnsName'] = fixed_ip
             else:
@@ -1137,9 +1149,10 @@ class CloudController(object):
             self._format_instance_type(instance, i)
             i['launchTime'] = instance['created_at']
             i['amiLaunchIndex'] = instance['launch_index']
-            self._format_instance_root_device_name(instance, i)
-            self._format_instance_bdm(context, instance['uuid'],
-                                      i['rootDeviceName'], i)
+            if instance['deleted'] != True:
+                self._format_instance_root_device_name(instance, i)
+                self._format_instance_bdm(context, instance['uuid'],
+                                          i['rootDeviceName'], i)
             host = instance['host']
             services = db.service_get_all_by_host(context.elevated(), host)
             zone = ec2utils.get_availability_zone_by_host(services, host)

@@ -1601,6 +1601,19 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
         query_prefix = query_prefix.\
                             filter(models.Instance.updated_at > changes_since)
 
+
+    if 'terminated-since' in filters:
+        terminated_since = timeutils.normalize_time(filters['terminated-since'])
+        filter = or_(and_(models.Instance.deleted_at >= terminated_since,
+                          models.Instance.vm_state == "deleted"),
+                     and_(models.Instance.deleted_at == None,
+                          models.Instance.deleted == False))
+        if 'instance-uuid' in filters:
+            instance_uuid = filters['instance-uuid']
+            filter = and_(filter,
+                          models.Instance.uuid == instance_uuid)
+        query_prefix = query_prefix.filter(filter)
+
     if 'deleted' in filters:
         # Instances can be soft or hard deleted and the query needs to
         # include or exclude both
@@ -3370,13 +3383,13 @@ def snapshot_get_host(context, snapshot_id):
                      models.Snapshot.id==snapshot_id,
                      models.Snapshot.deleted == False)
     with session.begin():
-        results = session.query(models.Volume.host).\
+        results = session.query(models.Volume.provider_location).\
                          join((models.Snapshot,
                                models.Volume.id==models.Snapshot.volume_id)).\
                          filter(my_filter).\
                          first()
         try:
-             result = results[0]
+             result = results[0].split()[0].split(":")[0]
         except:
              result = Null
 
