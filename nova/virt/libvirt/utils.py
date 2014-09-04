@@ -148,6 +148,20 @@ def create_lvm_image(vg, lv, size, sparse=False, thin=False):
         cmd = ('lvcreate', '-L', '%db' % size, '-n', lv, vg)
     execute(*cmd, run_as_root=True, attempts=3)
 
+def volume_group_info_space(vg):
+    """Return total, used and available space on volume group in bytes.
+
+    :param vg: volume group name
+    """
+    out, err = execute('vgs', '--noheadings', '--nosuffix',
+                       '--units', 'b', '-o', 'vg_size,vg_free', vg,
+                       run_as_root=True)
+
+    total, avail = out.split()
+    total = int(total.strip())
+    avail = int(avail.strip())
+    used = total - avail
+    return (total, used, avail)
 
 def volume_group_free_space(vg):
     """Return available space on volume group in bytes.

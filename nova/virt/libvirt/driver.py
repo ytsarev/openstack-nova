@@ -2210,8 +2210,37 @@ class LibvirtDriver(driver.ComputeDriver):
                 pool_name = "%s-pool" % FLAGS.libvirt_images_volume_group
                 out = utils.thin_pool_allocated_size(pool_name)
             else:
-                out = libvirt_utils.volume_group_total_space(FLAGS.libvirt_images_volume_group) - libvirt_utils.volume_group_free_space(FLAGS.libvirt_images_volume_group)
-            return int(out / 1024 ** 3)
+                total, used, avail = libvirt_utils.volume_group_info_space(FLAGS.libvirt_images_volume_group)
+            return int(used / 1024 ** 3)
+
+    def get_local_gb_all_info(self):
+        """Get all info about hdd size(GB) of physical computer.
+
+        :returns:
+           The total usage of HDD(GB).
+           The used space of HDD(GB).
+           The free space of HDD(GB).
+
+        """
+
+        if FLAGS.libvirt_images_type != "lvm":
+            stats = libvirt_utils.get_fs_info(FLAGS.instances_path)
+            total = int(stats['total'] / 1024 ** 3)
+            used = int(stats['used'] / 1024 ** 3)
+            avail = int(stats['free'] / 1024 ** 3)
+            return (total, used, avail)
+        else:
+            if FLAGS.libvirt_thin_logical_volumes == True:
+                pool_name = "%s-pool" % FLAGS.libvirt_images_volume_group
+                total = int(libvirt_utils.logical_volume_size(pool_path) / 1024 ** 3)
+                used = int(utils.thin_pool_allocated_size(pool_name) / 1024 ** 3)
+                avail = total - used
+            else:
+                total, used, avail = libvirt_utils.volume_group_info_space(FLAGS.libvirt_images_volume_group)
+                total = int(total / 1024 ** 3)
+                used = int(used / 1024 ** 3)
+                avail = int(avail / 1024 ** 3)
+            return (total, used, avail)
 
     def get_hypervisor_type(self):
         """Get hypervisor type.
@@ -2345,17 +2374,20 @@ class LibvirtDriver(driver.ComputeDriver):
 
         :returns: dictionary containing resource info
         """
+        disk_total, disk_used, disk_avail = self.get_local_gb_all_info()
+        instances_sz_bytes = self.get_disk_instances_sz()
+        instances_sz = ((disk_avail * 1024 *1024 * 1024) - instances_sz_bytes) / 1024 / 1024 / 1024
         dic = {'vcpus': self.get_vcpu_total(),
                'memory_mb': self.get_memory_mb_total(),
-               'local_gb': self.get_local_gb_total(),
+               'local_gb': disk_total,
                'vcpus_used': self.get_vcpu_used(),
                'memory_mb_used': self.get_memory_mb_used(),
-               'local_gb_used': self.get_local_gb_used(),
+               'local_gb_used': disk_used,
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
                'hypervisor_hostname': self.get_hypervisor_hostname(),
                'cpu_info': self.get_cpu_info(),
-               'disk_available_least': self.get_disk_available_least()}
+               'disk_available_least': instances_sz}
         return dic
 
     def check_can_live_migrate_destination(self, ctxt, instance_ref,
@@ -2828,6 +2860,37 @@ class LibvirtDriver(driver.ComputeDriver):
                               'disk_size': dk_size})
         return jsonutils.dumps(disk_info)
 
+    def get_disk_instances_sz(self):
+        """Return size of all instances on disk (??)
+
+        Copy'n'paste from method get_disk_available_least bellow
+
+        """
+        # available size of the disk
+        # Disk size that all instance uses : virtual_size - disk_size
+        instances_name = self.list_instances()
+        instances_sz = 0
+        for i_name in instances_name:
+            try:
+                disk_infos = jsonutils.loads(
+                        self.get_instance_disk_info(i_name))
+                for info in disk_infos:
+                    i_vt_sz = int(info['virt_disk_size'])
+                    i_dk_sz = int(info['disk_size'])
+                    instances_sz += i_vt_sz - i_dk_sz
+            except OSError as e:
+                if e.errno == errno.ENOENT:
+                    LOG.error(_("Getting disk size of %(i_name)s: %(e)s") %
+                              locals())
+                else:
+                    raise
+            except exception.InstanceNotFound:
+                # Instance was deleted during the check so ignore it
+                pass
+            # NOTE(gtt116): give change to do other task.
+            greenthread.sleep(0)
+        return instances_sz
+
     def get_disk_available_least(self):
         """Return disk available least size.
 
@@ -2839,7 +2902,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         """
         # available size of the disk
-        dk_sz_gb = self.get_local_gb_total() - self.get_local_gb_used()
+        disk_total, disk_used, disk_avail = self.get_local_gb_all_info()
+        dk_sz_gb = disk_avail
 
         # Disk size that all instance uses : virtual_size - disk_size
         instances_name = self.list_instances()
@@ -2864,8 +2928,8 @@ class LibvirtDriver(driver.ComputeDriver):
             # NOTE(gtt116): give change to do other task.
             greenthread.sleep(0)
         # Disk available least size
-        available_least_size = dk_sz_gb * (1024 ** 3) - instances_sz
-        return (available_least_size / 1024 / 1024 / 1024)
+        available_least_size = dk_sz_gb - instances_sz / 1024 / 1024 / 1024
+        return available_least_size
 
     def unfilter_instance(self, instance_ref, network_info):
         """See comments of same method in firewall_driver."""
@@ -3166,13 +3230,14 @@ class HostState(object):
         LOG.debug(_("Updating host stats"))
         if self.connection is None:
             self.connection = LibvirtDriver(self.read_only)
+        disk_total, disk_used, disk_avail = self.connection.get_local_gb_all_info()
         data = {}
         data["vcpus"] = self.connection.get_vcpu_total()
         data["vcpus_used"] = self.connection.get_vcpu_used()
         data["cpu_info"] = jsonutils.loads(self.connection.get_cpu_info())
-        data["disk_total"] = self.connection.get_local_gb_total()
-        data["disk_used"] = self.connection.get_local_gb_used()
-        data["disk_available"] = data["disk_total"] - data["disk_used"]
+        data["disk_total"] = disk_total
+        data["disk_used"] = disk_used
+        data["disk_available"] = disk_avail
         data["host_memory_total"] = self.connection.get_memory_mb_total()
         data["host_memory_free"] = (data["host_memory_total"] -
                                     self.connection.get_memory_mb_used())
