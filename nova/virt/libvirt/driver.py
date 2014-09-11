@@ -2232,6 +2232,7 @@ class LibvirtDriver(driver.ComputeDriver):
         else:
             if FLAGS.libvirt_thin_logical_volumes == True:
                 pool_name = "%s-pool" % FLAGS.libvirt_images_volume_group
+                pool_path = '%s/%s' % (FLAGS.libvirt_images_volume_group, pool_name)
                 total = int(libvirt_utils.logical_volume_size(pool_path) / 1024 ** 3)
                 used = int(utils.thin_pool_allocated_size(pool_name) / 1024 ** 3)
                 avail = total - used
