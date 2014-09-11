@@ -2999,12 +2999,6 @@ class HostStateTestCase(test.TestCase):
         def get_cpu_info(self):
             return HostStateTestCase.cpu_info
 
-        def get_local_gb_total(self):
-            return 100
-
-        def get_local_gb_used(self):
-            return 20
-
         def get_memory_mb_total(self):
             return 497
 
@@ -3029,6 +3023,9 @@ class HostStateTestCase(test.TestCase):
 
         def get_instance_capabilities(self):
             return HostStateTestCase.instance_caps
+
+        def get_local_gb_all_info(self):
+            return (100, 20, 80)
 
     def test_update_status(self):
         self.mox.StubOutWithMock(libvirt_driver, 'LibvirtDriver')
