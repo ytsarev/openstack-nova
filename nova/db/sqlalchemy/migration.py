@@ -57,7 +57,12 @@ if (not hasattr(migrate, '__version__') or
 
 
 # NOTE(jkoelker) Delay importing migrate until we are patched
-from migrate import exceptions as versioning_exceptions
+try:
+    # Try the more specific path first (migrate <= 0.6)
+    from migrate.versioning import exceptions as versioning_exceptions
+except ImportError:
+    # Use the newer path (migrate >= 0.7)
+    from migrate import exceptions as versioning_exceptions
 from migrate.versioning import api as versioning_api
 from migrate.versioning.repository import Repository
 
