@@ -100,7 +100,7 @@ libvirt_opts = [
                default='kvm',
                help='Libvirt domain type (valid options are: '
                     'kvm, lxc, qemu, uml, xen)'),
-    cfg.StrOpt('libvirt_hugepages',
+    cfg.BoolOpt('libvirt_hugepages',
                default=False,
                help='Libvirt hugepages memory backed'),
     cfg.BoolOpt('libvirt_dataplane',

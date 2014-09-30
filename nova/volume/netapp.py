@@ -474,8 +474,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
                                      AssumeConfirmation=True)
         except (suds.WebFault, Exception):
             server.DatasetEditRollback(EditLockId=lock_id)
-            msg = _('Failed to remove and delete dataset Qtree member')
-            raise exception.VolumeBackendAPIException(data=msg)
+            LOG.warn(_('Volume LUN deleted, Qtree delete failed, ignoring.'))
 
     def create_volume(self, volume):
         """Driver entry point for creating a new volume."""
