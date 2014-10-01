@@ -97,9 +97,6 @@ class HostState(object):
         # RAM/CPU overcommit ratio per comupte node
         self.ram_compute_ratio = 1.0
         self.cpu_compute_ratio = 1.0
-        # thin LVM support
-        self.thin_logical_volumes = False
-        self.thin_logical_volumes_overcommit = 1.0
 
         self.update_capabilities(topic, capabilities, service)
 
